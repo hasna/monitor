@@ -112,7 +112,13 @@ export function runMigrations(db?: Database): void {
   for (const file of files) {
     if (applied.has(file)) continue;
 
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
+    const raw = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
+
+    // Strip PRAGMA lines — they can't run inside a transaction
+    const sql = raw
+      .split("\n")
+      .filter((l) => !/^\s*PRAGMA\s/i.test(l))
+      .join("\n");
 
     // Run the whole migration in one transaction
     database.transaction(() => {

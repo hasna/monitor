@@ -1011,6 +1011,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ── Export ────────────────────────────────────────────────────────────────────
 
 export async function startMcpServer(): Promise<void> {
+  const { runMigrations } = await import("../db/client.js");
+  runMigrations();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[monitor-mcp] MCP server running on stdio");

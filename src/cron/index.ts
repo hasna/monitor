@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { execSync } from "child_process";
 import type { CronJobRow, CronRunRow } from "../db/schema.js";
 import { logCronRun, pruneOldMetrics, pruneOldProcesses, pruneOldAlerts, pruneOldCronRuns } from "../db/queries.js";
+import { runRetention, DEFAULT_RETENTION, type RetentionConfig } from "../db/retention.js";
 import { LocalCollector } from "../collectors/local.js";
 import { SshCollector } from "../collectors/ssh.js";
 import { Doctor } from "../doctor/index.js";
@@ -115,14 +116,20 @@ export async function runJobAction(
     }
 
     case "prune_metrics": {
-      const days = (config["older_than_days"] as number | undefined) ?? 30;
-      const m = pruneOldMetrics(days);
-      const p = pruneOldProcesses(days);
-      const a = pruneOldAlerts(days);
-      const c = pruneOldCronRuns(days);
+      // Smart tiered retention (downsample before delete)
+      const retentionCfg: RetentionConfig = {
+        ...DEFAULT_RETENTION,
+        fullResHours: (config["full_res_hours"] as number | undefined) ?? DEFAULT_RETENTION.fullResHours,
+        hourlyDays: (config["hourly_days"] as number | undefined) ?? DEFAULT_RETENTION.hourlyDays,
+        dailyDays: (config["daily_days"] as number | undefined) ?? DEFAULT_RETENTION.dailyDays,
+        alertRetentionDays: (config["alert_days"] as number | undefined) ?? DEFAULT_RETENTION.alertRetentionDays,
+        cronRunRetentionDays: (config["cron_run_days"] as number | undefined) ?? DEFAULT_RETENTION.cronRunRetentionDays,
+        cronRunsPerJob: (config["cron_runs_per_job"] as number | undefined) ?? DEFAULT_RETENTION.cronRunsPerJob,
+      };
+      const result = runRetention(retentionCfg);
       return {
         ok: true,
-        output: `pruned metrics=${m} processes=${p} alerts=${a} cron_runs=${c}`,
+        output: `retention: metrics_to_1h=${result.metricsDownsampledToHourly} metrics_to_1d=${result.metricsDownsampledToDaily} metrics_deleted=${result.metricsDeleted} processes_deleted=${result.processesDeleted} alerts_deleted=${result.alertsDeleted} cron_runs_deleted=${result.cronRunsDeleted} db_before=${result.dbSizeBefore} db_after=${result.dbSizeAfter} duration_ms=${result.durationMs}`,
       };
     }
 

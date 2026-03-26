@@ -609,6 +609,34 @@ program
     console.log(chalk.green("  Migration complete (or no legacy data found)."));
   });
 
+// ── monitor retention ─────────────────────────────────────────────────────────
+
+program
+  .command("retention")
+  .description("Run smart data retention (downsample old metrics, prune stale rows)")
+  .option("--full-res-hours <n>", "Keep full-resolution data for N hours (default 24)", "24")
+  .option("--hourly-days <n>",    "Keep hourly rollups for N days (default 7)", "7")
+  .option("--daily-days <n>",     "Keep daily rollups for N days (default 30)", "30")
+  .option("--dry-run",            "Show what would be pruned without deleting")
+  .action(async (opts) => {
+    const { runRetention, formatRetentionResult, DEFAULT_RETENTION } = await import("../db/retention.js");
+    if (opts.dryRun) {
+      console.log(chalk.yellow("  [dry-run] Showing retention config only — no data deleted"));
+      console.log(chalk.gray(`  full-res  : last ${opts.fullResHours}h`));
+      console.log(chalk.gray(`  hourly    : ${opts.hourlyDays}d window`));
+      console.log(chalk.gray(`  daily     : ${opts.dailyDays}d window`));
+      return;
+    }
+    console.log(chalk.cyan("  Running retention cycle..."));
+    const result = runRetention({
+      ...DEFAULT_RETENTION,
+      fullResHours: parseInt(opts.fullResHours),
+      hourlyDays: parseInt(opts.hourlyDays),
+      dailyDays: parseInt(opts.dailyDays),
+    });
+    console.log(chalk.green(formatRetentionResult(result)));
+  });
+
 // ── monitor integrations ──────────────────────────────────────────────────────
 
 const integrationsCmd = program
