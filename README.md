@@ -3,21 +3,22 @@
 > System monitor for AI agents and humans — watch multiple machines, detect problems, take action.
 
 [![npm](https://img.shields.io/npm/v/@hasna/monitor)](https://www.npmjs.com/package/@hasna/monitor)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Bun](https://img.shields.io/badge/runtime-bun-f9f1e1)](https://bun.sh)
 
 ## Features
 
-- **Multi-machine** — monitor local, SSH, and EC2 machines from one place
-- **Metrics** — CPU, memory, disk, GPU, load average, uptime, processes
-- **MCP server** — AI agents can query health, kill processes, manage cron jobs, and run doctor checks
-- **Doctor** — built-in health checks with actionable diagnostics
-- **Cron jobs** — schedule actions per machine with full cron syntax
-- **Process manager** — detect zombies and orphans, smart kill policy with signal selection
-- **Web dashboard** — dark-themed real-time gauges served at `http://localhost:3848`
-- **Full-text search** — search across machines, alerts, and processes
-- **Integrations** — open-todos, open-conversations, open-mementos, open-emails
-- **SQLite by default** — zero-config persistence; optional PostgreSQL for production
-- **Shell completions** — zsh and bash completions included
+- 🖥️ **Multi-machine** — monitor local, SSH, and EC2 machines from one place
+- 📊 **Metrics** — CPU, memory, disk, GPU, load average, uptime, processes
+- 🤖 **MCP server** — AI agents can query health, kill processes, manage cron jobs, and run doctor checks
+- 🔍 **Doctor** — built-in health checks with actionable diagnostics and auto-remediation
+- 💀 **Process manager** — detect zombies and orphans, smart kill policy with signal selection and safe list
+- 🔄 **Cron jobs** — schedule actions per machine with full cron syntax
+- 🌐 **Web dashboard** — dark-themed real-time gauges served at `http://localhost:3848` (like NVIDIA DGX Dashboard)
+- 🔎 **Full-text search** — search across machines, alerts, and processes
+- 🔗 **Integrations** — open-todos, open-conversations, open-mementos, open-emails
+- 💾 **SQLite by default** — zero-config persistence; optional PostgreSQL for production
+- 🐚 **Shell completions** — zsh and bash completions included
 
 ## Install
 
@@ -56,19 +57,18 @@ monitor search "high cpu"
 monitor serve --web
 ```
 
-## MCP Setup (Claude Code)
+## MCP Setup
 
-Add to `~/.claude/mcp.json`:
+```bash
+# Claude Code (recommended)
+claude mcp add --scope user monitor -- monitor-mcp
 
-```json
-{
-  "mcpServers": {
-    "monitor": {
-      "command": "monitor-mcp",
-      "args": []
-    }
-  }
-}
+# Or manually add to ~/.claude.json mcpServers:
+# "monitor": { "type": "stdio", "command": "monitor-mcp", "args": [] }
+
+# Codex — add to ~/.codex/config.toml:
+# [mcp_servers.monitor]
+# command = "monitor-mcp"
 ```
 
 ### Available MCP Tools
@@ -342,4 +342,4 @@ monitor migrate
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+Apache-2.0 — see [LICENSE](LICENSE) for details.
