@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+*.env
+bun.lockb
+*.db
+*.db-shm
+*.db-wal
+~/.hasna/monitor/
+.DS_Store
+*.log
+coverage/
+.turbo/
+dashboard/node_modules/
+dashboard/dist/

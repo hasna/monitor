@@ -1,0 +1,49 @@
+{
+  "name": "@hasna/monitor",
+  "version": "0.1.0",
+  "description": "System monitoring tool for multiple computers — local, SSH, EC2",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "bin": {
+    "monitor": "./bins/monitor.ts",
+    "monitor-mcp": "./bins/monitor-mcp.ts",
+    "monitor-server": "./bins/monitor-server.ts",
+    "monitor-web": "./bins/monitor-web.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "test": "bun test",
+    "lint": "bunx tsc --noEmit",
+    "monitor": "bun run ./bins/monitor.ts",
+    "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
+    "monitor-server": "bun run ./bins/monitor-server.ts",
+    "monitor-web": "bun run ./bins/monitor-web.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.600.0",
+    "@aws-sdk/client-ec2": "^3.600.0",
+    "@aws-sdk/client-ssm": "^3.1017.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "chalk": "^5.6.2",
+    "commander": "^12.1.0",
+    "cron-parser": "^5.5.0",
+    "node-cron": "^3.0.3",
+    "node-ssh": "^13.2.0",
+    "postgres": "^3.4.8",
+    "systeminformation": "^5.22.10",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^20.14.0",
+    "@types/node-cron": "^3.0.11",
+    "typescript": "^5.4.5"
+  }
+}

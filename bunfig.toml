@@ -1,0 +1,11 @@
+[install]
+# Use exact versions by default
+exact = false
+
+[run]
+# Bun shell settings
+bun = true
+
+[test]
+# Test timeout in milliseconds
+timeout = 30000
