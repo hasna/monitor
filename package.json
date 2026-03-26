@@ -1,6 +1,6 @@
 {
   "name": "@hasna/monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "System monitoring tool for multiple computers — local, SSH, EC2",
   "type": "module",
   "license": "MIT",
@@ -9,10 +9,10 @@
     "access": "public"
   },
   "bin": {
-    "monitor": "./bins/monitor.ts",
-    "monitor-mcp": "./bins/monitor-mcp.ts",
-    "monitor-server": "./bins/monitor-server.ts",
-    "monitor-web": "./bins/monitor-web.ts"
+    "monitor": "./bins/monitor.js",
+    "monitor-mcp": "./bins/monitor-mcp.js",
+    "monitor-server": "./bins/monitor-server.js",
+    "monitor-web": "./bins/monitor-web.js"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
