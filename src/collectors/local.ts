@@ -47,6 +47,8 @@ export interface ProcessInfo {
   ppid: number;
   isZombie: boolean;
   isOrphan: boolean;
+  /** Seconds the process has been running, if available */
+  elapsedSeconds?: number;
 }
 
 export interface SystemSnapshot {
@@ -135,18 +137,29 @@ export class LocalCollector {
       }));
 
       const allPids = new Set(processes.list.map((p) => p.pid));
+      const nowSec = Date.now() / 1000;
 
-      const processInfos: ProcessInfo[] = processes.list.map((p) => ({
-        pid: p.pid,
-        name: p.name,
-        cmd: p.command,
-        cpuPercent: p.cpu,
-        memMb: toMb(p.memRss ?? 0),
-        state: p.state,
-        ppid: p.parentPid,
-        isZombie: p.state === "zombie",
-        isOrphan: p.parentPid !== 0 && !allPids.has(p.parentPid),
-      }));
+      const processInfos: ProcessInfo[] = processes.list.map((p) => {
+        let elapsedSeconds: number | undefined;
+        if (p.started) {
+          const startedMs = new Date(p.started).getTime();
+          if (!isNaN(startedMs) && startedMs > 0) {
+            elapsedSeconds = Math.max(0, nowSec - startedMs / 1000);
+          }
+        }
+        return {
+          pid: p.pid,
+          name: p.name,
+          cmd: p.command,
+          cpuPercent: p.cpu,
+          memMb: toMb(p.memRss ?? 0),
+          state: p.state,
+          ppid: p.parentPid,
+          isZombie: p.state === "zombie",
+          isOrphan: p.parentPid !== 0 && !allPids.has(p.parentPid),
+          elapsedSeconds,
+        };
+      });
 
       const snapshot: SystemSnapshot = {
         machineId: this.machineId,

@@ -156,10 +156,10 @@ export function insertProcessSnapshot(rows: InsertProcess[]): void {
   const stmt = db.prepare(`
     INSERT INTO processes
       (machine_id, snapshot_at, pid, ppid, name, cmd, user,
-       cpu_percent, mem_mb, status, is_zombie, is_orphan, tags)
+       cpu_percent, mem_mb, status, is_zombie, is_orphan, tags, elapsed_sec)
     VALUES
       ($machine_id, $snapshot_at, $pid, $ppid, $name, $cmd, $user,
-       $cpu_percent, $mem_mb, $status, $is_zombie, $is_orphan, $tags)
+       $cpu_percent, $mem_mb, $status, $is_zombie, $is_orphan, $tags, $elapsed_sec)
   `);
 
   const insert = db.transaction((items: InsertProcess[]) => {
@@ -178,6 +178,7 @@ export function insertProcessSnapshot(rows: InsertProcess[]): void {
         $is_zombie: p.is_zombie ?? 0,
         $is_orphan: p.is_orphan ?? 0,
         $tags: p.tags ?? "[]",
+        $elapsed_sec: p.elapsed_sec ?? null,
       });
     }
   });

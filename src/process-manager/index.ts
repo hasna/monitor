@@ -43,6 +43,7 @@ export function processInfoToRow(p: ProcessInfo, machineId = "local", snapshotAt
     is_zombie: p.isZombie ? 1 : 0,
     is_orphan: p.isOrphan ? 1 : 0,
     tags: "[]",
+    elapsed_sec: p.elapsedSeconds != null ? Math.round(p.elapsedSeconds) : null,
   };
 }
 
@@ -66,6 +67,7 @@ export interface ProcessReport {
   zombies: ProcessRow[];
   orphans: ProcessRow[];
   highMem: ProcessRow[];
+  stuck: ProcessRow[];
   recommendations: string[];
 }
 
@@ -101,6 +103,15 @@ export const SAFE_PROCESSES: readonly string[] = [
   "kernel",
   "bun",
   "node",
+  // Coding agents — never auto-kill
+  "claude",
+  "claude-code",
+  "codex",
+  "gemini",
+  "cursor",
+  "aider",
+  "continue",
+  "copilot",
 ];
 
 // ── Detection helpers ────────────────────────────────────────────────────────
@@ -131,6 +142,20 @@ export function detectOrphans(processes: ProcessRow[]): ProcessRow[] {
 }
 
 /**
+ * Detect processes that have been running longer than `thresholdHours` hours.
+ * Only considers processes where `elapsed_sec` is available.
+ */
+export function detectStuck(
+  processes: ProcessRow[],
+  thresholdHours: number
+): ProcessRow[] {
+  const thresholdSec = thresholdHours * 3600;
+  return processes.filter(
+    (p) => p.elapsed_sec != null && p.elapsed_sec > thresholdSec
+  );
+}
+
+/**
  * Detect processes using more than `thresholdMb` MB of memory.
  */
 export function detectHighMemory(
@@ -150,11 +175,13 @@ export class ProcessManager {
    */
   analyse(
     processes: ProcessRow[],
-    highMemThresholdMb = 500
+    highMemThresholdMb = 500,
+    stuckThresholdHours = 24
   ): ProcessReport {
     const zombies = detectZombies(processes);
     const orphans = detectOrphans(processes);
     const highMem = detectHighMemory(processes, highMemThresholdMb);
+    const stuck = detectStuck(processes, stuckThresholdHours);
 
     const recommendations: string[] = [];
 
@@ -177,8 +204,17 @@ export class ProcessManager {
         `${highMem.length} process(es) using >${highMemThresholdMb} MB RAM (e.g. ${topNames}).`
       );
     }
+    if (stuck.length > 0) {
+      const topNames = stuck
+        .slice(0, 3)
+        .map((p) => `${p.name}(${p.pid})`)
+        .join(", ");
+      recommendations.push(
+        `${stuck.length} process(es) running >${stuckThresholdHours}h (e.g. ${topNames}) — may be stuck.`
+      );
+    }
 
-    return { zombies, orphans, highMem, recommendations };
+    return { zombies, orphans, highMem, stuck, recommendations };
   }
 
   /**
@@ -188,10 +224,11 @@ export class ProcessManager {
   analyseSnapshot(
     processes: ProcessInfo[],
     machineId = "local",
-    highMemThresholdMb = 500
+    highMemThresholdMb = 500,
+    stuckThresholdHours = 24
   ): ProcessReport {
     const rows = processes.map((p) => processInfoToRow(p, machineId));
-    return this.analyse(rows, highMemThresholdMb);
+    return this.analyse(rows, highMemThresholdMb, stuckThresholdHours);
   }
 
   /**
@@ -352,7 +389,9 @@ export class ProcessManager {
     processes: ProcessRow[],
     policy: KillPolicy,
     machineId = "local",
-    sshCollector?: SshCollector
+    sshCollector?: SshCollector,
+    /** Auto-kill processes exceeding this memory threshold (MB). 0 = disabled. */
+    highMemThresholdMb = 0
   ): Promise<ProcessAction[]> {
     if (policy.mode === "never") return [];
 
@@ -383,6 +422,28 @@ export class ProcessManager {
       // mode === auto
       const result = await this.kill(proc.pid, "SIGTERM", machineId, sshCollector);
       actions.push({ ...result, name: proc.name });
+    }
+
+    // High-memory auto-kill (only when threshold is set and mode is auto)
+    if (highMemThresholdMb > 0 && policy.mode === "auto") {
+      const highMem = detectHighMemory(processes, highMemThresholdMb);
+      for (const proc of highMem) {
+        if (this.isSafe(proc.name, policy)) {
+          actions.push({
+            pid: proc.pid,
+            name: proc.name,
+            action: "skipped",
+            reason: `"${proc.name}" is on the safe list (mem: ${proc.mem_mb?.toFixed(0)} MB)`,
+          });
+          continue;
+        }
+        const result = await this.kill(proc.pid, "SIGTERM", machineId, sshCollector);
+        actions.push({
+          ...result,
+          name: proc.name,
+          reason: `high memory usage: ${proc.mem_mb?.toFixed(0)} MB > ${highMemThresholdMb} MB threshold`,
+        });
+      }
     }
 
     return actions;

@@ -71,6 +71,8 @@ export interface ProcessRow {
   is_orphan: number;
   /** JSON-encoded array */
   tags: string;
+  /** Seconds the process has been running (from /proc/PID/stat or platform equivalent) */
+  elapsed_sec: number | null;
 }
 
 export type InsertProcess = Omit<ProcessRow, "id">;
