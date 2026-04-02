@@ -3,7 +3,7 @@
  * All statements are prepared on first use for maximum performance.
  */
 
-import { getDb } from "./client";
+import { getDb } from "./client.js";
 import type {
   MachineRow,
   InsertMachine,
@@ -19,7 +19,7 @@ import type {
   InsertCronRun,
   DoctorRuleRow,
   InsertDoctorRule,
-} from "./schema";
+} from "./schema.js";
 
 // ─── machines ─────────────────────────────────────────────────────────────
 
