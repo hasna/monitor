@@ -103,7 +103,7 @@ export interface CronJobRow {
   /** Cron expression, e.g. every 5 minutes */
   schedule: string;
   command: string;
-  action_type: "shell" | "kill_process" | "restart_process" | "doctor" | "custom";
+  action_type: "shell" | "kill_process" | "restart_process" | "doctor" | "prune_metrics" | "cleanup_zombies" | "cleanup_caches" | "custom";
   /** JSON-encoded object */
   action_config: string;
   /** 0 | 1 */

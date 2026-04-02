@@ -562,17 +562,19 @@ describe("cron_jobs CRUD", () => {
   });
 
   it("listCronJobs returns all jobs when no machineId given", () => {
+    const before = listCronJobs().length;
     insertCronJob({ machine_id: null, name: "Job 1", schedule: "* * * * *", command: "echo a", action_type: "shell", action_config: "{}", enabled: 1, last_run_at: null, last_run_status: null });
     insertCronJob({ machine_id: null, name: "Job 2", schedule: "* * * * *", command: "echo b", action_type: "shell", action_config: "{}", enabled: 1, last_run_at: null, last_run_status: null });
-    expect(listCronJobs().length).toBe(2);
+    expect(listCronJobs().length).toBe(before + 2);
   });
 
   it("listCronJobs filters by machineId (includes null machine jobs)", () => {
+    const before = listCronJobs("m1").length;
     insertMachine(machine("m1", "M1"));
     insertCronJob({ machine_id: "m1", name: "M1 Job", schedule: "* * * * *", command: "echo m1", action_type: "shell", action_config: "{}", enabled: 1, last_run_at: null, last_run_status: null });
     insertCronJob({ machine_id: null, name: "Global Job", schedule: "* * * * *", command: "echo global", action_type: "shell", action_config: "{}", enabled: 1, last_run_at: null, last_run_status: null });
     const jobs = listCronJobs("m1");
-    expect(jobs.length).toBe(2);
+    expect(jobs.length).toBe(before + 2);
   });
 
   it("logCronRun creates a run record and updates job last_run_at", () => {

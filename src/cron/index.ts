@@ -1,5 +1,8 @@
 import cron from "node-cron";
 import { execSync } from "child_process";
+import { existsSync, readdirSync, statSync, rmSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import type { CronJobRow, CronRunRow } from "../db/schema.js";
 import { logCronRun, pruneOldMetrics, pruneOldProcesses, pruneOldAlerts, pruneOldCronRuns } from "../db/queries.js";
 import { runRetention, DEFAULT_RETENTION, type RetentionConfig } from "../db/retention.js";
@@ -53,6 +56,7 @@ export type BuiltinActionType =
   | "doctor"
   | "prune_metrics"
   | "cleanup_zombies"
+  | "cleanup_caches"
   | "custom";
 
 type OnRunCallback = (record: CronRunRecord) => void;
@@ -143,6 +147,92 @@ export async function runJobAction(
       } catch (err) {
         return { ok: false, error: String(err) };
       }
+    }
+
+    case "cleanup_caches": {
+      const home = homedir();
+      const dryRun = (config["dryRun"] as boolean | undefined) ?? false;
+      const maxAgeDays = (config["maxAgeDays"] as number | undefined) ?? 7;
+      const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+
+      const DEFAULT_TARGETS = [
+        join(home, ".bun", "install", "cache"),
+        join(home, ".npm", "_cacache"),
+        join(home, ".cache", "uv"),
+        join(home, ".cache", "pip"),
+        join(home, ".cache", "ms-playwright"),
+        "/tmp",
+        join(home, ".hasna", "monitor"),
+      ];
+
+      const targets = (config["targets"] as string[] | undefined) ?? DEFAULT_TARGETS;
+
+      let bytesFreed = 0;
+      let filesRemoved = 0;
+      const errors: string[] = [];
+
+      function sizeOf(p: string): number {
+        try {
+          const st = statSync(p);
+          return st.isFile() ? st.size : 0;
+        } catch {
+          return 0;
+        }
+      }
+
+      function removeOldEntries(dir: string, olderThanMs: number, logRotate = false): void {
+        if (!existsSync(dir)) return;
+        let entries: string[];
+        try {
+          entries = readdirSync(dir);
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          const full = join(dir, entry);
+          // Log rotation: keep last 500 lines of .log files
+          if (logRotate && entry.endsWith(".log")) {
+            try {
+              const lines = readFileSync(full, "utf8").split("\n");
+              if (lines.length > 500) {
+                const trimmed = lines.slice(-500).join("\n");
+                if (!dryRun) writeFileSync(full, trimmed);
+              }
+            } catch {
+              // ignore
+            }
+            continue;
+          }
+          try {
+            const st = statSync(full);
+            const age = now - st.mtimeMs;
+            if (age > olderThanMs) {
+              const size = sizeOf(full);
+              if (!dryRun) rmSync(full, { recursive: true, force: true });
+              bytesFreed += size;
+              filesRemoved++;
+            }
+          } catch (err) {
+            errors.push(String(err));
+          }
+        }
+      }
+
+      for (const target of targets) {
+        const isMonitorLogs = target.includes(".hasna");
+        const isPlaywright = target.includes("ms-playwright");
+        const playwrightMaxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+        const age = isPlaywright ? playwrightMaxAge : maxAgeMs;
+        removeOldEntries(target, age, isMonitorLogs);
+      }
+
+      const kb = (bytesFreed / 1024).toFixed(1);
+      const summary = dryRun
+        ? `dry-run: would remove ${filesRemoved} entries (~${kb} KB) from ${targets.length} targets`
+        : `freed ${kb} KB (${filesRemoved} entries) from ${targets.length} targets${errors.length ? ` | ${errors.length} errors` : ""}`;
+
+      return { ok: true, output: summary };
     }
 
     default: {
