@@ -31,6 +31,7 @@ function makeProcess(overrides: Partial<ProcessRow> = {}): ProcessRow {
     is_zombie: 0,
     is_orphan: 0,
     tags: "[]",
+    elapsed_sec: null,
     ...overrides,
   };
 }

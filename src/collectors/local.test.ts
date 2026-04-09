@@ -47,28 +47,10 @@ const fakeGraphics = {
   ],
 };
 
-const fakeProcesses = {
-  list: [
-    {
-      pid: 1,
-      name: "init",
-      command: "/sbin/init",
-      cpu: 0.1,
-      memRss: 1024 * 1024,
-      state: "sleeping",
-      parentPid: 0,
-    },
-    {
-      pid: 100,
-      name: "bash",
-      command: "/bin/bash",
-      cpu: 2.3,
-      memRss: 5 * 1024 * 1024,
-      state: "running",
-      parentPid: 1,
-    },
-  ],
-};
+const fakePsOutput = [
+  "1 0 root Ss 0.1 1024 120 init /sbin/init",
+  "100 1 root R 2.3 5120 30 bash /bin/bash",
+].join("\n");
 
 const fakeOsInfo = {
   hostname: "testhost",
@@ -86,10 +68,21 @@ mock.module("systeminformation", () => ({
     mem: async () => fakeMem,
     fsSize: async () => fakeFsSize,
     graphics: async () => fakeGraphics,
-    processes: async () => fakeProcesses,
+    processes: async () => ({ list: [] }),
     osInfo: async () => fakeOsInfo,
     time: async () => fakeTime,
   },
+}));
+
+mock.module("./command.js", () => ({
+  runLocalShellCommand: async () => ({
+    ok: true,
+    stdout: fakePsOutput,
+    stderr: "",
+    exitCode: 0,
+    durationMs: 1,
+    timedOut: false,
+  }),
 }));
 
 // Also mock os.loadavg

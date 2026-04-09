@@ -72,8 +72,9 @@ function makeProcessReport(zombieCount = 0): ProcessReport {
     is_zombie: 1 as const,
     is_orphan: 0 as const,
     tags: "[]",
+    elapsed_sec: null,
   }));
-  return { zombies, orphans: [], highMem: [], recommendations: [] };
+  return { zombies, orphans: [], highMem: [], stuck: [], recommendations: [] };
 }
 
 // ── checkMemory ───────────────────────────────────────────────────────────────

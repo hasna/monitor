@@ -1,5 +1,10 @@
 import si from "systeminformation";
 import { loadavg } from "os";
+import type { CommandOptions, CommandResult } from "./command.js";
+import { runLocalShellCommand } from "./command.js";
+
+const PS_PROCESS_LIST_COMMAND =
+  "ps -eo pid=,ppid=,user=,stat=,%cpu=,rss=,etimes=,comm=,args=";
 
 export interface CpuStats {
   brand: string;
@@ -71,6 +76,82 @@ export type CollectorResult =
 export class LocalCollector {
   constructor(private readonly machineId: string = "local") {}
 
+  private processInfoFromSystemInformation(): Promise<ProcessInfo[]> {
+    return si.processes().then((processes) => {
+      const allPids = new Set(processes.list.map((p) => p.pid));
+      const nowSec = Date.now() / 1000;
+
+      return processes.list.map((p) => {
+        let elapsedSeconds: number | undefined;
+        if (p.started) {
+          const startedMs = new Date(p.started).getTime();
+          if (!isNaN(startedMs) && startedMs > 0) {
+            elapsedSeconds = Math.max(0, nowSec - startedMs / 1000);
+          }
+        }
+
+        return {
+          pid: p.pid,
+          name: p.name,
+          cmd: p.command,
+          cpuPercent: p.cpu,
+          memMb: (p.memRss ?? 0) / 1024 / 1024,
+          state: p.state,
+          ppid: p.parentPid,
+          isZombie: p.state === "zombie",
+          isOrphan: p.parentPid !== 0 && !allPids.has(p.parentPid),
+          elapsedSeconds,
+        };
+      });
+    });
+  }
+
+  private async collectProcessInfo(): Promise<ProcessInfo[]> {
+    const result = await this.runCommand(PS_PROCESS_LIST_COMMAND, { timeoutMs: 2_000 });
+    if (!result.ok || !result.stdout.trim()) {
+      return await this.processInfoFromSystemInformation();
+    }
+
+    const processes = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .flatMap((line) => {
+        const match =
+          /^(\d+)\s+(-?\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/.exec(
+            line
+          );
+        if (!match) return [];
+
+        const pid = match[1]!;
+        const ppid = match[2]!;
+        const stat = match[4]!;
+        const cpuPercent = match[5]!;
+        const rssKb = match[6]!;
+        const elapsedSec = match[7]!;
+        const comm = match[8]!;
+        const args = match[9] ?? "";
+        return [{
+          pid: Number.parseInt(pid, 10),
+          name: comm,
+          cmd: args || comm,
+          cpuPercent: Number.parseFloat(cpuPercent),
+          memMb: Number.parseInt(rssKb, 10) / 1024,
+          state: stat,
+          ppid: Number.parseInt(ppid, 10),
+          isZombie: stat.includes("Z"),
+          isOrphan: false,
+          elapsedSeconds: Number.parseInt(elapsedSec, 10),
+        }];
+      });
+
+    const allPids = new Set(processes.map((processInfo) => processInfo.pid));
+    return processes.map((processInfo) => ({
+      ...processInfo,
+      isOrphan: processInfo.ppid !== 0 && !allPids.has(processInfo.ppid),
+    }));
+  }
+
   async collect(): Promise<CollectorResult> {
     try {
       const [
@@ -80,8 +161,9 @@ export class LocalCollector {
         mem,
         fsSize,
         graphics,
-        processes,
+        processInfos,
         osInfo,
+        clockInfo,
       ] = await Promise.all([
         si.cpu(),
         si.currentLoad(),
@@ -89,8 +171,9 @@ export class LocalCollector {
         si.mem(),
         si.fsSize(),
         si.graphics(),
-        si.processes(),
+        this.collectProcessInfo(),
         si.osInfo(),
+        si.time(),
       ]);
 
       // Use os.loadavg() for accurate 1/5/15 minute load averages
@@ -136,36 +219,11 @@ export class LocalCollector {
         temperatureC: null,
       }));
 
-      const allPids = new Set(processes.list.map((p) => p.pid));
-      const nowSec = Date.now() / 1000;
-
-      const processInfos: ProcessInfo[] = processes.list.map((p) => {
-        let elapsedSeconds: number | undefined;
-        if (p.started) {
-          const startedMs = new Date(p.started).getTime();
-          if (!isNaN(startedMs) && startedMs > 0) {
-            elapsedSeconds = Math.max(0, nowSec - startedMs / 1000);
-          }
-        }
-        return {
-          pid: p.pid,
-          name: p.name,
-          cmd: p.command,
-          cpuPercent: p.cpu,
-          memMb: toMb(p.memRss ?? 0),
-          state: p.state,
-          ppid: p.parentPid,
-          isZombie: p.state === "zombie",
-          isOrphan: p.parentPid !== 0 && !allPids.has(p.parentPid),
-          elapsedSeconds,
-        };
-      });
-
       const snapshot: SystemSnapshot = {
         machineId: this.machineId,
         hostname: osInfo.hostname,
         platform: osInfo.platform,
-        uptime: (await si.time()).uptime,
+        uptime: clockInfo.uptime,
         ts: Date.now(),
         cpu: cpuStats,
         mem: memStats,
@@ -187,5 +245,9 @@ export class LocalCollector {
     return result.snapshot.processes
       .sort((a, b) => b.cpuPercent - a.cpuPercent)
       .slice(0, n);
+  }
+
+  async runCommand(command: string, options: CommandOptions = {}): Promise<CommandResult> {
+    return await runLocalShellCommand(command, options);
   }
 }

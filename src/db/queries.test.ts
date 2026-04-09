@@ -380,6 +380,7 @@ function makeProcessRow(overrides: Record<string, unknown> = {}) {
     is_zombie: 0,
     is_orphan: 0,
     tags: "[]",
+    elapsed_sec: null,
     ...overrides,
   };
 }
