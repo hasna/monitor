@@ -1,5 +1,4 @@
-import { LocalCollector } from "../collectors/local.js";
-import { Doctor } from "../doctor/index.js";
+import { getCollectorForMachine } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig } from "../config.js";
 import {
@@ -26,10 +25,13 @@ import {
   CronJobInputSchema,
   ApiSearchQuerySchema,
 } from "../validation.js";
+import {
+  collectMachineDiagnostics,
+  mergeStoredAndLiveAlerts,
+} from "../runtime-health.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
-const doctor = new Doctor();
 const pm = new ProcessManager();
 
 // ── SSE state ─────────────────────────────────────────────────────────────────
@@ -61,19 +63,14 @@ function startSseBroadcast(): void {
         machines = [{ id: "local" }];
       }
       for (const machine of machines) {
-        const collector = new LocalCollector(machine.id);
-        const result = await collector.collect();
-        if (result.ok) {
-          const processRows = result.snapshot.processes.map((p) =>
-            processInfoToRow(p, machine.id)
-          );
-          const processReport = pm.analyse(processRows);
-          const doctorReport = doctor.analyse(result.snapshot, processReport);
+        const diagnostics = await collectMachineDiagnostics(machine.id).catch(() => null);
+        if (diagnostics) {
           broadcastSse({
             machine_id: machine.id,
             ts: Date.now(),
-            snapshot: result.snapshot,
-            doctor: doctorReport,
+            snapshot: diagnostics.snapshot,
+            doctor: diagnostics.doctorReport,
+            runtime_health: diagnostics.runtimeHealth,
           });
         }
       }
@@ -237,17 +234,13 @@ route("DELETE", "/api/machines/:id", async (_, params) => {
 
 route("GET", "/api/machines/:id/snapshot", async (_, params) => {
   const machineId = params["id"] ?? "local";
-  const collector = new LocalCollector(machineId);
+  const collector = getCollectorForMachine(machineId);
   const result = await collector.collect();
   if (!result.ok) return err(result.error, 500);
 
-  const processRows = result.snapshot.processes.map((p) =>
-    processInfoToRow(p, machineId)
-  );
-  const processReport = pm.analyse(processRows);
-  const doctorReport = doctor.analyse(result.snapshot, processReport);
-
-  return json({ snapshot: result.snapshot, doctor: doctorReport });
+  const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => err(String(error), 500));
+  if (diagnostics instanceof Response) return diagnostics;
+  return json({ snapshot: diagnostics.snapshot, doctor: diagnostics.doctorReport, runtime_health: diagnostics.runtimeHealth });
 });
 
 // ── GET /api/machines/:id/metrics ─────────────────────────────────────────────
@@ -277,7 +270,7 @@ route("GET", "/api/machines/:id/processes", async (req, params) => {
   const filter = url.searchParams.get("filter") ?? "all";
 
   // Try live collection first
-  const collector = new LocalCollector(machineId);
+  const collector = getCollectorForMachine(machineId);
   const result = await collector.collect();
 
   if (!result.ok) {
@@ -332,26 +325,15 @@ route("GET", "/api/machines/:id/alerts", async (req, params) => {
   const unresolvedOnly = url.searchParams.get("unresolved_only") !== "false";
 
   try {
-    const alerts = listAlerts(machineId, unresolvedOnly);
+    const diagnostics = await collectMachineDiagnostics(machineId);
+    const alerts = unresolvedOnly
+      ? mergeStoredAndLiveAlerts(machineId, diagnostics.doctorReport)
+      : listAlerts(machineId, unresolvedOnly);
     return json(alerts);
   } catch {
-    // Fall back to live doctor
-    const collector = new LocalCollector(machineId);
-    const result = await collector.collect();
-    if (!result.ok) return err(result.error, 500);
-    const report = doctor.analyse(result.snapshot);
-    const alerts = report.checks
-      .filter((c) => c.status !== "ok")
-      .map((c, i) => ({
-        id: i + 1,
-        machine_id: machineId,
-        triggered_at: Math.floor(Date.now() / 1000),
-        resolved_at: null,
-        severity: c.severity,
-        check_name: c.name,
-        message: c.message,
-        auto_resolved: 0,
-      }));
+    const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => err(String(error), 500));
+    if (diagnostics instanceof Response) return diagnostics;
+    const alerts = mergeStoredAndLiveAlerts(machineId, diagnostics.doctorReport);
     return json(alerts);
   }
 });
@@ -360,17 +342,9 @@ route("GET", "/api/machines/:id/alerts", async (req, params) => {
 
 route("POST", "/api/machines/:id/doctor", async (_, params) => {
   const machineId = params["id"] ?? "local";
-  const collector = new LocalCollector(machineId);
-  const result = await collector.collect();
-  if (!result.ok) return err(result.error, 500);
-
-  const processRows = result.snapshot.processes.map((p) =>
-    processInfoToRow(p, machineId)
-  );
-  const processReport = pm.analyse(processRows);
-  const doctorReport = doctor.analyse(result.snapshot, processReport);
-
-  return json(doctorReport);
+  const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => err(String(error), 500));
+  if (diagnostics instanceof Response) return diagnostics;
+  return json({ ...diagnostics.doctorReport, runtimeHealth: diagnostics.runtimeHealth });
 });
 
 // ── POST /api/machines/:id/kill ───────────────────────────────────────────────

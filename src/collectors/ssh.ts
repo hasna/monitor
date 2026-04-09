@@ -1,6 +1,7 @@
 import { NodeSSH } from "node-ssh";
 import type { CollectorResult, SystemSnapshot, GpuStats } from "./local.js";
 import type { MachineRow } from "../db/schema.js";
+import type { CommandOptions, CommandResult } from "./command.js";
 
 export interface SshCollectorOptions {
   machineId: string;
@@ -148,6 +149,46 @@ export class SshCollector {
       throw new Error(`SSH command failed: ${cmd}\n${result.stderr}`);
     }
     return result.stdout;
+  }
+
+  async runCommand(command: string, options: CommandOptions = {}): Promise<CommandResult> {
+    const startedAt = Date.now();
+
+    try {
+      await this.ensureConnected();
+
+      const runPromise = this.ssh.execCommand(command);
+      const result = options.timeoutMs && options.timeoutMs > 0
+        ? await Promise.race([
+            runPromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Command timed out after ${options.timeoutMs}ms`)), options.timeoutMs)
+            ),
+          ])
+        : await runPromise;
+
+      return {
+        ok: (result.code ?? 0) === 0,
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        exitCode: result.code ?? null,
+        durationMs: Date.now() - startedAt,
+        timedOut: false,
+      };
+    } catch (error) {
+      if (String(error).includes("timed out")) {
+        this.disconnect();
+      }
+      return {
+        ok: false,
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        durationMs: Date.now() - startedAt,
+        timedOut: String(error).includes("timed out"),
+        error: String(error),
+      };
+    }
   }
 
   /** Two-sample CPU measurement with 200ms interval */

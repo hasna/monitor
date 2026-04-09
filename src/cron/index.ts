@@ -6,10 +6,8 @@ import { join } from "path";
 import type { CronJobRow, CronRunRow } from "../db/schema.js";
 import { logCronRun, pruneOldMetrics, pruneOldProcesses, pruneOldAlerts, pruneOldCronRuns } from "../db/queries.js";
 import { runRetention, DEFAULT_RETENTION, type RetentionConfig } from "../db/retention.js";
-import { LocalCollector } from "../collectors/local.js";
-import { SshCollector } from "../collectors/ssh.js";
-import { Doctor } from "../doctor/index.js";
 import { ProcessManager } from "../process-manager/index.js";
+import { collectMachineDiagnostics } from "../runtime-health.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,12 +108,14 @@ export async function runJobAction(
     }
 
     case "doctor": {
-      const collector = new LocalCollector(machineId ?? "local");
-      const doctor = new Doctor();
-      const result = await collector.collect();
-      if (!result.ok) return { ok: false, error: result.error };
-      const report = doctor.analyse(result.snapshot);
-      const summary = `status=${report.overallStatus} checks=${report.checks.length} actions=${report.recommendedActions.length}`;
+      const diagnostics = await collectMachineDiagnostics(machineId ?? "local").catch((error) => ({
+        error: String(error),
+      }));
+      if ("error" in diagnostics) return { ok: false, error: diagnostics.error };
+      const report = diagnostics.doctorReport;
+      const summary =
+        `status=${report.overallStatus} checks=${report.checks.length} actions=${report.recommendedActions.length} ` +
+        `mcp_failed=${diagnostics.runtimeHealth.mcp.failedCount} tmux_dead=${diagnostics.runtimeHealth.tmux.deadCount}`;
       return { ok: true, output: summary };
     }
 

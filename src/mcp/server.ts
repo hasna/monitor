@@ -4,8 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { LocalCollector } from "../collectors/local.js";
-import { Doctor } from "../doctor/index.js";
+import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig, saveConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
@@ -39,10 +38,15 @@ import {
   AgentHeartbeatInputSchema,
   AgentSetFocusInputSchema,
 } from "../validation.js";
+import {
+  collectMachineDiagnostics,
+  collectRuntimeHealthAcrossMachines,
+  mergeStoredAndLiveAlerts,
+} from "../runtime-health.js";
+import { MONITOR_VERSION } from "../version.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
-const doctor = new Doctor();
 const pm = new ProcessManager();
 const cronEngine = new CronEngine();
 
@@ -73,23 +77,8 @@ function sanitizeProcessRow<T extends { cmd: string | null }>(row: T): T {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getCollectorForMachine(machineId: string): LocalCollector {
-  // For now all machines use LocalCollector — SSH/EC2 collectors can be wired in later
-  return new LocalCollector(machineId);
-}
-
 async function collectAndAnalyse(machineId = "local") {
-  const collector = getCollectorForMachine(machineId);
-  const result = await collector.collect();
-  if (!result.ok) throw new Error(result.error);
-
-  const processRows = result.snapshot.processes.map((p) =>
-    processInfoToRow(p, machineId)
-  );
-  const processReport = pm.analyse(processRows);
-  const doctorReport = doctor.analyse(result.snapshot, processReport);
-
-  return { snapshot: result.snapshot, doctorReport, processReport, processRows };
+  return await collectMachineDiagnostics(machineId);
 }
 
 function textContent(text: string) {
@@ -107,7 +96,7 @@ function errorContent(message: string) {
 // ── Server setup ─────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "open-monitor", version: "0.1.0" },
+  { name: "open-monitor", version: MONITOR_VERSION },
   { capabilities: { tools: {} } }
 );
 
@@ -138,6 +127,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Run health checks on a machine and return a detailed DoctorReport. " +
         "Checks CPU%, memory%, disk% per mount, GPU%, load average, and zombie process count. " +
+        "Also includes Claude MCP connection status and dead tmux pane detection when available. " +
         "Each check has a status (ok/warn/critical), threshold, and current value. " +
         "The report includes recommended actions in plain English for the AI agent. " +
         "Use this to diagnose whether a machine needs attention.",
@@ -147,6 +137,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           machine_id: {
             type: "string",
             description: "ID of the machine to check. Omit for local machine.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_mcp_health",
+      description:
+        "Inspect Claude MCP server connectivity and dead tmux panes on one or all machines. " +
+        "Runs `claude mcp list` to verify configured MCP servers respond, and checks tmux for dead panes. " +
+        "Use this when you need MCP-specific runtime health rather than generic CPU or memory checks.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Inspect a single machine by ID. Omit to use the local machine unless all_machines=true.",
+          },
+          all_machines: {
+            type: "boolean",
+            description: "Inspect every configured machine instead of just one. Default: false.",
           },
         },
       },
@@ -521,15 +531,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_snapshot ──────────────────────────────────────────────────
       case "monitor_snapshot": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { snapshot, doctorReport } = await collectAndAnalyse(machineId);
-        return jsonContent({ snapshot, doctorReport });
+        const { snapshot, doctorReport, runtimeHealth } = await collectAndAnalyse(machineId);
+        return jsonContent({ snapshot, doctorReport, runtimeHealth });
       }
 
       // ── monitor_health ────────────────────────────────────────────────────
       case "monitor_health": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { doctorReport } = await collectAndAnalyse(machineId);
-        return jsonContent(doctorReport);
+        const { doctorReport, runtimeHealth } = await collectAndAnalyse(machineId);
+        return jsonContent({ ...doctorReport, runtimeHealth });
+      }
+
+      // ── monitor_mcp_health ────────────────────────────────────────────────
+      case "monitor_mcp_health": {
+        const allMachines = (a["all_machines"] as boolean | undefined) ?? false;
+        if (allMachines) {
+          const machineIds = listKnownMachineIds();
+          const results = await collectRuntimeHealthAcrossMachines(machineIds);
+          return jsonContent(results.map((result) => ({
+            machine_id: result.machineId,
+            error: result.error,
+            runtime_health: result.diagnostics?.runtimeHealth,
+          })));
+        }
+
+        const machineId = (a["machine_id"] as string | undefined) ?? "local";
+        const { runtimeHealth } = await collectAndAnalyse(machineId);
+        return jsonContent({ machine_id: machineId, runtime_health: runtimeHealth });
       }
 
       // ── monitor_processes ─────────────────────────────────────────────────
@@ -668,29 +696,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const machineId = a["machine_id"] as string | undefined;
         const unresolvedOnly = (a["unresolved_only"] as boolean | undefined) ?? true;
 
-        let alerts;
-        try {
-          alerts = listAlerts(machineId, unresolvedOnly);
-        } catch {
-          // DB not initialized — fall back to live doctor
-          const id = machineId ?? "local";
-          const { doctorReport } = await collectAndAnalyse(id);
-          const liveAlerts = doctorReport.checks
-            .filter((c) => c.status !== "ok")
-            .map((c, i) => ({
-              id: i + 1,
-              machine_id: id,
-              triggered_at: doctorReport.ts,
-              resolved_at: null,
-              severity: c.severity === "warning" ? "warn" : c.severity,
-              check_name: c.name,
-              message: c.message,
-              auto_resolved: 0,
-            }));
-          return jsonContent(liveAlerts);
+        if (machineId) {
+          const { doctorReport } = await collectAndAnalyse(machineId);
+          return jsonContent(
+            unresolvedOnly
+              ? mergeStoredAndLiveAlerts(machineId, doctorReport)
+              : listAlerts(machineId, unresolvedOnly)
+          );
         }
 
-        return jsonContent(alerts);
+        return jsonContent(listAlerts(undefined, unresolvedOnly));
       }
 
       // ── monitor_cron_jobs ─────────────────────────────────────────────────
@@ -759,7 +774,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_doctor ────────────────────────────────────────────────────
       case "monitor_doctor": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { snapshot, doctorReport, processReport } = await collectAndAnalyse(machineId);
+        const { snapshot, doctorReport, processReport, runtimeHealth } = await collectAndAnalyse(machineId);
 
         // Build AI-agent-friendly recommendations
         const agentRecommendations: string[] = [...doctorReport.recommendedActions];
@@ -828,6 +843,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           machine_id: machineId,
           overall_status: doctorReport.overallStatus,
           checks: doctorReport.checks,
+          runtime_health: runtimeHealth,
           agent_recommendations: [...new Set(agentRecommendations)],
           summary: {
             cpu_percent: snapshot.cpu.usagePercent,

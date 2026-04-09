@@ -1,7 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { LocalCollector } from "../collectors/local.js";
-import { Doctor } from "../doctor/index.js";
+import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig, saveConfig, migrateConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
@@ -14,9 +13,16 @@ import {
   insertCronJob,
   getCronJob,
 } from "../db/queries.js";
+import type { AlertRow } from "../db/schema.js";
 import { search } from "../db/search.js";
 import { CronEngine, runJobAction } from "../cron/index.js";
 import type { KillSignal } from "../process-manager/index.js";
+import {
+  collectMachineDiagnostics,
+  collectRuntimeHealthAcrossMachines,
+  mergeStoredAndLiveAlerts,
+} from "../runtime-health.js";
+import { MONITOR_VERSION } from "../version.js";
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
@@ -68,7 +74,7 @@ const program = new Command();
 program
   .name("monitor")
   .description(chalk.cyan("@hasna/monitor") + " — system monitoring CLI")
-  .version("0.1.0");
+  .version(MONITOR_VERSION);
 
 // ── monitor status [machine] ──────────────────────────────────────────────────
 
@@ -78,7 +84,7 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
-    const collector = new LocalCollector(machineId);
+    const collector = getCollectorForMachine(machineId);
     const result = await collector.collect();
 
     if (!result.ok) {
@@ -217,24 +223,16 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
-    const collector = new LocalCollector(machineId);
-    const result = await collector.collect();
-
-    if (!result.ok) {
-      console.error(chalk.red(`Error: ${result.error}`));
+    const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => {
+      console.error(chalk.red(`Error: ${error}`));
       process.exit(1);
-    }
+    });
+    if (!diagnostics) return;
 
-    const pm = new ProcessManager();
-    const doctor = new Doctor();
-    const processRows = result.snapshot.processes.map((p) =>
-      processInfoToRow(p, machineId)
-    );
-    const processReport = pm.analyse(processRows);
-    const report = doctor.analyse(result.snapshot, processReport);
+    const report = diagnostics.doctorReport;
 
     if (opts.json) {
-      console.log(JSON.stringify(report, null, 2));
+      console.log(JSON.stringify({ ...report, runtimeHealth: diagnostics.runtimeHealth }, null, 2));
       return;
     }
 
@@ -261,6 +259,31 @@ program
       console.log(`  ${icon} ${name} ${msg}`);
     }
 
+    if (diagnostics.runtimeHealth.mcp.servers.length > 0) {
+      console.log();
+      console.log(chalk.bold("  Claude MCP Servers:"));
+      for (const server of diagnostics.runtimeHealth.mcp.servers) {
+        const icon =
+          server.status === "connected"
+            ? chalk.green("✓")
+            : server.status === "failed"
+            ? chalk.red("✗")
+            : chalk.yellow("?");
+        const status = server.status === "connected" ? chalk.dim(server.rawStatus) : server.rawStatus;
+        console.log(`  ${icon} ${server.name.padEnd(20)} ${status}`);
+      }
+    }
+
+    if (diagnostics.runtimeHealth.tmux.deadCount > 0) {
+      console.log();
+      console.log(chalk.bold("  Dead tmux panes:"));
+      for (const pane of diagnostics.runtimeHealth.tmux.deadPanes) {
+        const exitStatus = pane.deadStatus === null ? chalk.dim("unknown") : String(pane.deadStatus);
+        const command = pane.startCommand || pane.currentCommand || "(no command recorded)";
+        console.log(`  ${chalk.red("✗")} ${pane.ref.padEnd(20)} exit ${exitStatus}  ${command}`);
+      }
+    }
+
     if (report.recommendedActions.length > 0) {
       console.log();
       console.log(chalk.bold("  Recommended Actions:"));
@@ -282,7 +305,7 @@ program
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
-    const collector = new LocalCollector(machineId);
+    const collector = getCollectorForMachine(machineId);
     const pm = new ProcessManager();
     const result = await collector.collect();
 
@@ -358,6 +381,71 @@ program
     console.log();
   });
 
+// ── monitor mcp-health [machine] ─────────────────────────────────────────────
+
+program
+  .command("mcp-health [machine]")
+  .description("Inspect Claude MCP server status and dead tmux panes")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const machineIds = opts.all ? listKnownMachineIds() : [machineArg ?? "local"];
+    const results = await collectRuntimeHealthAcrossMachines(machineIds);
+
+    if (opts.json) {
+      console.log(JSON.stringify(results.map((result) => ({
+        machineId: result.machineId,
+        error: result.error,
+        runtimeHealth: result.diagnostics?.runtimeHealth,
+      })), null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of results) {
+      if (result.error || !result.diagnostics) {
+        console.log(chalk.red(`  ${result.machineId}: ${result.error}`));
+        continue;
+      }
+
+      const { runtimeHealth } = result.diagnostics;
+      const summaryStatus =
+        runtimeHealth.mcp.failedCount > 0 || runtimeHealth.tmux.deadCount > 0
+          ? chalk.yellow("ATTENTION")
+          : chalk.green("OK");
+
+      console.log(chalk.bold(`  Machine: ${result.machineId}`) + `  ${summaryStatus}`);
+      console.log(
+        chalk.dim(
+          `  MCP connected: ${runtimeHealth.mcp.connectedCount}/${runtimeHealth.mcp.servers.length}  |  Dead tmux panes: ${runtimeHealth.tmux.deadCount}`
+        )
+      );
+
+      if (runtimeHealth.mcp.servers.length > 0) {
+        for (const server of runtimeHealth.mcp.servers) {
+          const icon =
+            server.status === "connected"
+              ? chalk.green("✓")
+              : server.status === "failed"
+              ? chalk.red("✗")
+              : chalk.yellow("?");
+          console.log(`    ${icon} ${server.name.padEnd(20)} ${server.rawStatus}`);
+        }
+      } else {
+        console.log(chalk.dim("    No Claude MCP servers configured"));
+      }
+
+      if (runtimeHealth.tmux.deadCount > 0) {
+        for (const pane of runtimeHealth.tmux.deadPanes) {
+          const exitStatus = pane.deadStatus === null ? "unknown" : String(pane.deadStatus);
+          console.log(`    ${chalk.red("✗")} dead tmux pane ${pane.ref} (exit ${exitStatus})`);
+        }
+      }
+
+      console.log();
+    }
+  });
+
 // ── monitor kill <pid> ────────────────────────────────────────────────────────
 
 program
@@ -405,32 +493,22 @@ program
     const machineId = machineArg;
     const unresolvedOnly = !opts.all;
 
-    let alerts;
+    let alerts: AlertRow[];
     try {
       alerts = listAlerts(machineId, unresolvedOnly);
     } catch {
-      // DB not available — show live doctor checks as alerts
-      const id = machineId ?? "local";
-      const collector = new LocalCollector(id);
-      const doctor = new Doctor();
-      const result = await collector.collect();
-      if (!result.ok) {
-        console.error(chalk.red(`Error: ${result.error}`));
+      alerts = [];
+    }
+
+    if (machineId) {
+      const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => {
+        console.error(chalk.red(`Error: ${error}`));
         process.exit(1);
-      }
-      const report = doctor.analyse(result.snapshot);
-      alerts = report.checks
-        .filter((c) => c.status !== "ok")
-        .map((c, i) => ({
-          id: i + 1,
-          machine_id: id,
-          triggered_at: Math.floor(Date.now() / 1000),
-          resolved_at: null,
-          severity: c.severity === "warning" ? "warn" : c.severity,
-          check_name: c.name,
-          message: c.message,
-          auto_resolved: 0,
-        }));
+      });
+      if (!diagnostics) return;
+      alerts = unresolvedOnly
+        ? mergeStoredAndLiveAlerts(machineId, diagnostics.doctorReport)
+        : alerts;
     }
 
     if (opts.json) {

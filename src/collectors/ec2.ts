@@ -11,6 +11,7 @@ import {
   GetCommandInvocationCommand,
 } from "@aws-sdk/client-ssm";
 import type { CollectorResult, SystemSnapshot } from "./local.js";
+import type { CommandOptions, CommandResult } from "./command.js";
 
 export interface Ec2CollectorOptions {
   machineId: string;
@@ -238,7 +239,33 @@ export class Ec2Collector {
    * Run a shell command on the EC2 instance via SSM RunCommand.
    * Polls until the command completes (up to 30s).
    */
-  private async runSsmCommand(command: string): Promise<string> {
+  async runCommand(command: string, options: CommandOptions = {}): Promise<CommandResult> {
+    const startedAt = Date.now();
+    try {
+      const stdout = await this.runSsmCommand(command, options.timeoutMs ?? 30_000);
+      return {
+        ok: true,
+        stdout,
+        stderr: "",
+        exitCode: 0,
+        durationMs: Date.now() - startedAt,
+        timedOut: false,
+      };
+    } catch (error) {
+      const message = String(error);
+      return {
+        ok: false,
+        stdout: "",
+        stderr: message,
+        exitCode: null,
+        durationMs: Date.now() - startedAt,
+        timedOut: message.includes("timed out"),
+        error: message,
+      };
+    }
+  }
+
+  private async runSsmCommand(command: string, timeoutMs = 30_000): Promise<string> {
     const send = await this.ssm.send(
       new SendCommandCommand({
         InstanceIds: [this.opts.instanceId],
@@ -251,7 +278,9 @@ export class Ec2Collector {
     if (!commandId) throw new Error("SSM RunCommand did not return a CommandId");
 
     // Poll for up to 30 seconds
-    for (let i = 0; i < 15; i++) {
+    const pollIntervalMs = 2_000;
+    const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollIntervalMs));
+    for (let i = 0; i < maxAttempts; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const inv = await this.ssm.send(
         new GetCommandInvocationCommand({
@@ -266,6 +295,6 @@ export class Ec2Collector {
         throw new Error(`SSM command failed: ${inv.StandardErrorContent}`);
       }
     }
-    throw new Error("SSM command timed out");
+    throw new Error(`SSM command timed out after ${timeoutMs}ms`);
   }
 }
