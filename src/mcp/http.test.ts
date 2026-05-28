@@ -11,9 +11,9 @@ import {
 } from "./http.js";
 
 describe("mcp http transport", () => {
-  test("defaults port to 8826", () => {
-    expect(DEFAULT_MCP_HTTP_PORT).toBe(8826);
-    expect(resolveMcpHttpPort(["node"], {})).toBe(8826);
+  test("defaults port to 8869", () => {
+    expect(DEFAULT_MCP_HTTP_PORT).toBe(8869);
+    expect(resolveMcpHttpPort(["node"], {})).toBe(8869);
     expect(resolveMcpHttpPort(["node", "--port", "9001"], {})).toBe(9001);
     expect(resolveMcpHttpPort(["node"], { MCP_HTTP_PORT: "9002" })).toBe(9002);
   });

@@ -3,13 +3,20 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { ConnectableMcpServer } from "./http-types.js";
 
 export const MCP_HTTP_SERVICE_NAME = "monitor";
-export const DEFAULT_MCP_HTTP_PORT = 8826;
+export const DEFAULT_MCP_HTTP_PORT = 8869;
 
 export function isHttpMode(
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return argv.includes("--http") || env.MCP_HTTP === "1";
+}
+
+export function isStdioMode(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return argv.includes("--stdio") || env.MCP_STDIO === "1";
 }
 
 export function resolveMcpHttpPort(

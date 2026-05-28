@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { buildServer, startMcpServer } from "../src/mcp/server.js";
-import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "../src/mcp/http.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "../src/mcp/http.js";
 import { MONITOR_VERSION } from "../src/version.js";
 
 const args = process.argv.slice(2);
@@ -24,23 +24,19 @@ if (args.includes("-V") || args.includes("--version")) {
 }
 
 async function main(): Promise<void> {
-  if (isHttpMode(args, process.env)) {
-    const { runMigrations } = await import("../src/db/client.js");
-    runMigrations();
-
-    const handle = await startMcpHttpServer(buildServer, {
-      port: resolveMcpHttpPort(args, process.env),
-    });
-    process.on("SIGINT", () => {
-      void handle.close().finally(() => process.exit(0));
-    });
-    process.on("SIGTERM", () => {
-      void handle.close().finally(() => process.exit(0));
-    });
+  if (isStdioMode(args, process.env)) {
+    await startMcpServer();
     return;
   }
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const { runMigrations } = await import("../src/db/client.js");
+  runMigrations();
 
-  await startMcpServer();
+  const handle = await startMcpHttpServer(buildServer, {
+    port: resolveMcpHttpPort(args, process.env),
+  });
+  process.on("SIGINT", () => { void handle.close().finally(() => process.exit(0)); });
+  process.on("SIGTERM", () => { void handle.close().finally(() => process.exit(0)); });
 }
 
 main().catch((err) => {
