@@ -23,7 +23,7 @@ if (args.includes("-V") || args.includes("--version")) {
   process.exit(0);
 }
 
-async function main(): Promise<void> {
+async function main() {
   if (isHttpMode(args, process.env)) {
     const { runMigrations } = await import("../src/db/client.js");
     runMigrations();
