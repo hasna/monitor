@@ -17,7 +17,7 @@ _monitor() {
   local cur prev words cword
   _init_completion || return
 
-  local subcommands="status machines add doctor ps kill alerts cron migrate serve mcp completions help"
+  local subcommands="status machines add doctor ps kill alerts apps compare-apps service containers ports tailscale temperature mcp-health mcp-status mcp-restart report cron migrate serve mcp completions help"
 
   case "$prev" in
     monitor)
@@ -34,6 +34,56 @@ _monitor() {
       else
         COMPREPLY=($(compgen -W "$machines" -- "$cur"))
       fi
+      return
+      ;;
+
+    report)
+      COMPREPLY=($(compgen -W "-p --period -s --send --schedule -j --json" -- "$cur"))
+      return
+      ;;
+
+    apps)
+      COMPREPLY=($(compgen -W "-a --all -c --compare -j --json" -- "$cur"))
+      return
+      ;;
+
+    compare-apps)
+      COMPREPLY=($(compgen -W "-j --json" -- "$cur"))
+      return
+      ;;
+
+    service)
+      COMPREPLY=($(compgen -W "-m --machine -j --json list start stop restart" -- "$cur"))
+      return
+      ;;
+
+    temperature)
+      COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      return
+      ;;
+
+    ports)
+      COMPREPLY=($(compgen -W "-a --all -p --protocol -j --json" -- "$cur"))
+      return
+      ;;
+
+    tailscale)
+      COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      return
+      ;;
+
+    mcp-health|mcp-status)
+      COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      return
+      ;;
+
+    mcp-restart)
+      COMPREPLY=($(compgen -W "-m --machine -j --json" -- "$cur"))
+      return
+      ;;
+
+    containers)
+      COMPREPLY=($(compgen -W "-a --all -l --logs -t --tail -j --json" -- "$cur"))
       return
       ;;
 
@@ -112,7 +162,7 @@ _monitor() {
   local i subcommand=""
   for (( i=1; i < cword; i++ )); do
     case "${words[$i]}" in
-      status|machines|add|doctor|ps|kill|alerts|cron|migrate|serve|mcp|completions)
+      status|machines|add|doctor|ps|kill|alerts|apps|compare-apps|service|containers|ports|tailscale|temperature|mcp-health|mcp-status|mcp-restart|report|cron|migrate|serve|mcp|completions)
         subcommand="${words[$i]}"
         break
         ;;
@@ -120,6 +170,108 @@ _monitor() {
   done
 
   case "$subcommand" in
+    containers)
+      local prev_in_containers="${words[$((cword - 1))]}"
+      case "$prev_in_containers" in
+        --tail|-t)
+          COMPREPLY=()
+          ;;
+        *)
+          if [[ "$cur" == -* ]]; then
+            COMPREPLY=($(compgen -W "-a --all -l --logs -t --tail -j --json" -- "$cur"))
+          else
+            local machines
+            machines=$(_monitor_machine_ids)
+            COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+          fi
+          ;;
+      esac
+      ;;
+    ports)
+      local prev_in_ports="${words[$((cword - 1))]}"
+      case "$prev_in_ports" in
+        --protocol|-p)
+          COMPREPLY=($(compgen -W "tcp udp" -- "$cur"))
+          ;;
+        *)
+          if [[ "$cur" == -* ]]; then
+            COMPREPLY=($(compgen -W "-a --all -p --protocol -j --json" -- "$cur"))
+          else
+            local machines
+            machines=$(_monitor_machine_ids)
+            COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+          fi
+          ;;
+      esac
+      ;;
+    tailscale)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      else
+        local machines
+        machines=$(_monitor_machine_ids)
+        COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+      fi
+      ;;
+    apps)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-a --all -c --compare -j --json" -- "$cur"))
+      else
+        local machines
+        machines=$(_monitor_machine_ids)
+        COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+      fi
+      ;;
+    service)
+      local prev_in_service="${words[$((cword - 1))]}"
+      case "$prev_in_service" in
+        --machine|-m)
+          local machines
+          machines=$(_monitor_machine_ids)
+          COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+          ;;
+        list|start|stop|restart)
+          COMPREPLY=()
+          ;;
+        *)
+          COMPREPLY=($(compgen -W "-m --machine -j --json list start stop restart" -- "$cur"))
+          ;;
+      esac
+      ;;
+    temperature)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      else
+        local machines
+        machines=$(_monitor_machine_ids)
+        COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+      fi
+      ;;
+    mcp-health|mcp-status)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-a --all -j --json" -- "$cur"))
+      else
+        local machines
+        machines=$(_monitor_machine_ids)
+        COMPREPLY=($(compgen -W "$machines" -- "$cur"))
+      fi
+      ;;
+    mcp-restart)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-m --machine -j --json" -- "$cur"))
+      fi
+      ;;
+    report)
+      local prev_in_report="${words[$((cword - 1))]}"
+      case "$prev_in_report" in
+        --period|-p|--schedule)
+          COMPREPLY=($(compgen -W "daily weekly" -- "$cur"))
+          ;;
+        *)
+          COMPREPLY=($(compgen -W "-p --period -s --send --schedule -j --json" -- "$cur"))
+          ;;
+      esac
+      ;;
     cron)
       local prev_in_cron="${words[$((cword - 1))]}"
       case "$prev_in_cron" in

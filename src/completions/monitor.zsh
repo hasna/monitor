@@ -15,6 +15,17 @@ _monitor() {
     'ps:Show process table'
     'kill:Kill a process by PID'
     'alerts:List alerts for a machine'
+    'apps:Show installed apps or compare them across machines'
+    'compare-apps:Compare installed apps across all configured machines'
+    'service:List or control system services and detected dev servers'
+    'containers:Show container status/resources or logs'
+    'ports:Show listening TCP and UDP ports'
+    'tailscale:Show Tailscale peer status and latency'
+    'temperature:Show CPU/GPU thermals, fan speeds, and alerts'
+    'mcp-health:Inspect Claude MCP server status and dead tmux panes'
+    'mcp-status:Show MCP server health with matched process details'
+    'mcp-restart:Restart a matched MCP process and re-check health'
+    'report:Build or schedule fleet health reports'
     'cron:Manage cron jobs'
     'migrate:Migrate config from legacy locations'
     'serve:Start the REST API and web server'
@@ -79,6 +90,70 @@ _monitor() {
             '(-a --all)'{-a,--all}'[Show all alerts including resolved ones]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
+          ;;
+        apps)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-c --compare)'{-c,--compare}'[Compare installed apps across machines]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        compare-apps)
+          _arguments \
+            '(-j --json)'{-j,--json}'[Output raw JSON]'
+          ;;
+        service)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:action:(list start stop restart)' \
+            '2::service-name:'
+          ;;
+        temperature)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        containers)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-l --logs)'{-l,--logs}'[Fetch logs for a specific container]:container:' \
+            '(-t --tail)'{-t,--tail}'[Number of log lines to fetch]:lines:' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        ports)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Scan all configured machines]' \
+            '(-p --protocol)'{-p,--protocol}'[Filter by protocol]:protocol:(tcp udp)' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        tailscale)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        mcp-health|mcp-status)
+          _arguments \
+            '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::machine-id:_monitor_machine_ids'
+          ;;
+        mcp-restart)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:name:'
+          ;;
+        report)
+          _arguments \
+            '(-p --period)'{-p,--period}'[Report window]:period:(daily weekly)' \
+            '(-s --send)'{-s,--send}'[Send via configured conversations/emails integrations]' \
+            '--schedule[Create or update a scheduled report job]:period:(daily weekly)' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]'
           ;;
         cron)
           local -a cron_subcommands

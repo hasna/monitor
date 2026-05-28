@@ -13,7 +13,10 @@
 - 🤖 **MCP server** — AI agents can query health, kill processes, manage cron jobs, and run doctor checks
 - 🔍 **Doctor** — built-in health checks with actionable diagnostics and auto-remediation
 - 💀 **Process manager** — detect zombies and orphans, smart kill policy with signal selection and safe list
+- 📦 **Container monitoring** — inspect Docker/Podman/Nerdctl containers, resource usage, and logs
+- 🚪 **Port scanner** — see which TCP/UDP ports are listening on one machine or across the fleet
 - 🔄 **Cron jobs** — schedule actions per machine with full cron syntax
+- 📨 **Fleet reports** — generate daily/weekly health summaries and deliver them via open-conversations or open-emails
 - 🌐 **Web dashboard** — dark-themed real-time gauges served at `http://localhost:3848` (like NVIDIA DGX Dashboard)
 - 🔎 **Full-text search** — search across machines, alerts, and processes
 - 🔗 **Integrations** — open-todos, open-conversations, open-mementos, open-emails
@@ -78,6 +81,16 @@ claude mcp add --scope user monitor -- monitor-mcp
 | `monitor_snapshot` | Get current metrics snapshot (CPU, memory, disk, GPU) |
 | `monitor_health` | Run health checks and return pass/warn/fail status |
 | `monitor_processes` | List running processes with optional filters |
+| `monitor_apps` | List installed apps/packages or compare inventories across machines |
+| `monitor_service` | List or control system services and detected dev servers |
+| `monitor_containers` | List containers and resource usage on one or all machines |
+| `monitor_container_logs` | Fetch recent logs for one container |
+| `monitor_ports` | List listening TCP/UDP ports on one or all machines |
+| `monitor_tailscale` | Show Tailscale peer status, IPs, health, and latency |
+| `monitor_temperature` | Show CPU/GPU temperatures, fan speeds, and thermal alerts |
+| `monitor_mcp_health` | Check Claude MCP registration health and dead tmux panes |
+| `monitor_mcp_status` | Show MCP server health with best-effort matched process details |
+| `monitor_mcp_restart` | Restart a matched MCP process and re-check health |
 | `monitor_kill` | Kill a process by PID with configurable signal |
 | `monitor_machines` | List all configured machines |
 | `monitor_add_machine` | Add a new machine to monitor |
@@ -107,6 +120,19 @@ monitor <command> [options]
 | `ps [machine]` | List processes, with optional filter |
 | `kill <pid>` | Kill a process by PID |
 | `alerts [machine]` | Show recent alerts |
+| `apps [machine]` | List installed apps/packages or compare them across machines |
+| `compare-apps` | Compare installed apps across all configured machines |
+| `service <action> [name]` | List or control system services and detected dev servers |
+| `containers [machine]` | Show containers and resource usage |
+| `ports [machine]` | Show listening TCP/UDP ports |
+| `tailscale [machine]` | Show Tailscale peer status, IPs, health, and latency |
+| `temperature [machine]` | Show CPU/GPU temperatures, fan speeds, and thermal alerts |
+| `mcp-health [machine]` | Check Claude MCP registration health and dead tmux panes |
+| `mcp-status [machine]` | Show MCP health plus best-effort matched process PIDs, memory, and uptime |
+| `mcp-restart <name>` | Restart a matched MCP process if one is running, then re-check health |
+| `report` | Build a daily fleet health report |
+| `report --send` | Deliver the current report via configured integrations |
+| `report --schedule daily|weekly` | Create or update a scheduled fleet report job |
 | `cron list` | List scheduled cron jobs |
 | `cron add <name> <schedule> <command>` | Add a cron job |
 | `cron run <job-id>` | Run a cron job immediately |
@@ -123,6 +149,8 @@ monitor <command> [options]
 | `completions zsh` | Print zsh completions |
 | `completions bash` | Print bash completions |
 | `completions install` | Auto-install shell completions |
+
+`mcp-status` and `monitor_mcp_status` use live process snapshots, so stdio servers can report `connected` with `processCount: 0` when no long-lived child is present at the instant of collection.
 
 ### monitor add
 
@@ -162,6 +190,77 @@ monitor ps --json              # raw JSON output
 monitor kill 1234              # SIGTERM (default)
 monitor kill 1234 --signal SIGKILL
 monitor kill 1234 --signal 9
+```
+
+### monitor apps
+
+```bash
+monitor apps                  # local package/app inventory
+monitor apps apple03          # one remote machine
+monitor apps --all            # inventories for all configured machines
+monitor apps --compare        # highlight missing/version-skewed/root-owned installs
+monitor compare-apps          # dedicated cross-machine consistency report
+monitor apps --json
+```
+
+### monitor service
+
+```bash
+monitor service list                       # show system services plus detected dev servers
+monitor service list --machine apple03    # inspect one remote machine
+monitor service start postgresql          # systemd / brew / launchctl start
+monitor service restart nginx             # systemd / brew / launchctl restart
+monitor service stop vite:12345           # stop a detected dev server by PID-backed name
+monitor service list --json
+```
+
+### monitor temperature
+
+```bash
+monitor temperature            # local thermal snapshot
+monitor temperature spark01    # one remote machine
+monitor temperature --all      # inspect all configured machines
+monitor temperature --json
+```
+
+### monitor containers
+
+```bash
+monitor containers                 # local container list
+monitor containers spark01         # remote machine containers
+monitor containers --all           # all configured machines
+monitor containers --logs api      # recent logs for one container
+monitor containers --logs api --tail 200
+monitor containers --json
+```
+
+### monitor ports
+
+```bash
+monitor ports                # local listeners
+monitor ports spark01        # one remote machine
+monitor ports --all          # scan all configured machines
+monitor ports --protocol tcp # filter by protocol
+monitor ports --json         # raw JSON output
+```
+
+### monitor tailscale
+
+```bash
+monitor tailscale          # local Tailscale graph
+monitor tailscale spark01  # one remote machine
+monitor tailscale --all    # inspect all configured machines
+monitor tailscale --json   # raw JSON output
+```
+
+### monitor report
+
+```bash
+monitor report                       # preview daily fleet report
+monitor report --period weekly       # preview weekly fleet report
+monitor report --send                # send via configured conversations/emails integrations
+monitor report --schedule daily      # create/update a 9:00 daily cron report
+monitor report --schedule weekly     # create/update a Monday 9:00 weekly cron report
 ```
 
 ## Web Dashboard
