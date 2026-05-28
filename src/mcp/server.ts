@@ -112,6 +112,7 @@ function errorContent(message: string) {
 
 // ── Server setup ─────────────────────────────────────────────────────────────
 
+export function buildServer(): Server {
 const server = new Server(
   { name: "open-monitor", version: MONITOR_VERSION },
   { capabilities: { tools: {} } }
@@ -1504,11 +1505,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+return server;
+}
+
 // ── Export ────────────────────────────────────────────────────────────────────
 
 export async function startMcpServer(): Promise<void> {
   const { runMigrations } = await import("../db/client.js");
   runMigrations();
+  const server = buildServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[monitor-mcp] MCP server running on stdio");
