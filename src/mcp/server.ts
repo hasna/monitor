@@ -30,10 +30,19 @@ import { search } from "../db/search.js";
 import { CronEngine } from "../cron/index.js";
 import type { KillSignal } from "../process-manager/index.js";
 import {
+  AppsInputSchema,
+  ContainerLogsInputSchema,
+  McpRestartInputSchema,
+  McpStatusInputSchema,
+  ServiceInputSchema,
+  TemperatureInputSchema,
   validate,
   ValidationError,
   KillInputSchema,
   CronJobInputSchema,
+  PortsInputSchema,
+  TailscaleInputSchema,
+  TmuxExecInputSchema,
   AgentRegisterInputSchema,
   AgentHeartbeatInputSchema,
   AgentSetFocusInputSchema,
@@ -43,7 +52,15 @@ import {
   collectRuntimeHealthAcrossMachines,
   mergeStoredAndLiveAlerts,
 } from "../runtime-health.js";
+import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
+import { compareInstalledApps, listInstalledApps, listInstalledAppsAcrossMachines } from "../apps.js";
+import { listManagedServices, manageService } from "../services.js";
+import { getContainerLogs, listContainers, listContainersAcrossMachines } from "../containers.js";
+import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServer } from "../mcp-processes.js";
+import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
+import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
+import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
@@ -162,6 +179,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "monitor_mcp_status",
+      description:
+        "Show MCP server health with matched process PIDs, memory usage, uptime, and last successful health check time. " +
+        "Use this to see which configured MCP servers are healthy and whether they have a live matching process.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Inspect all configured machines instead of one machine. Default: false.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_mcp_restart",
+      description:
+        "Restart a matched MCP process if one is running, then re-check health. " +
+        "For on-demand stdio servers with no live PID match, this performs a health re-check without killing anything.",
+      inputSchema: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local.",
+          },
+          name: {
+            type: "string",
+            description: "Configured MCP server name to restart or re-check.",
+          },
+        },
+      },
+    },
+    {
       name: "monitor_processes",
       description:
         "List running processes on a machine. Supports filtering to find specific problem processes. " +
@@ -185,6 +241,150 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "'zombies' returns zombie processes. " +
               "'orphans' returns processes whose parent has exited. " +
               "'high_mem' returns processes using >500 MB RAM.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_exec",
+      description:
+        "Send a command to a tmux pane or broadcast it to all tmux panes on a machine. " +
+        "Use this for agent control actions such as restarting dev servers, clearing panes, or running a command " +
+        "without direct terminal access. Target can be a tmux pane ref like session:window.pane or a tmux window target; " +
+        "set all=true to broadcast to every pane.",
+      inputSchema: {
+        type: "object",
+        required: ["command"],
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local.",
+          },
+          target: {
+            type: "string",
+            description: "tmux target like session:window.pane or session:window. Required unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Broadcast to all tmux panes on the selected machine. Default: false.",
+          },
+          command: {
+            type: "string",
+            description: "Shell command to type into the tmux pane(s).",
+          },
+          enter: {
+            type: "boolean",
+            description: "Press Enter after typing. Default: true.",
+          },
+          timeout_ms: {
+            type: "number",
+            description: "Timeout in milliseconds for each tmux send operation. Default: 3000.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_containers",
+      description:
+        "Show container status and resource usage on one machine or across all configured machines. " +
+        "Returns runtime, container name, image, status, ports, CPU, memory, and IO when available.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Inspect all configured machines instead of one machine. Default: false.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_container_logs",
+      description:
+        "Fetch recent logs for a single container on a machine. " +
+        "Uses the first available runtime among docker, podman, and nerdctl.",
+      inputSchema: {
+        type: "object",
+        required: ["container"],
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local.",
+          },
+          container: {
+            type: "string",
+            description: "Container name or ID.",
+          },
+          tail: {
+            type: "number",
+            description: "Number of log lines to fetch. Default: 100.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_ports",
+      description:
+        "Show listening TCP/UDP ports on one machine or across all configured machines. " +
+        "Returns the host, port, protocol, pid, and process name for listeners discovered via lsof/ss. " +
+        "Use this to see what is currently accepting connections.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Scan all configured machines instead of one machine. Default: false.",
+          },
+          protocol: {
+            type: "string",
+            enum: ["tcp", "udp"],
+            description: "Optional protocol filter.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_tailscale",
+      description:
+        "Show Tailscale peer status, IPs, health, and peer latency on one machine or across all configured machines. " +
+        "Returns the local node plus normalized peer entries including online state, relay, and measured latency when available.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Inspect all configured machines instead of one machine. Default: false.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_temperature",
+      description:
+        "Show CPU/GPU temperatures, fan speeds, and thermal alerts on one machine or across all configured machines. " +
+        "Uses Linux thermal sysfs and nvidia-smi when available, or macOS powermetrics when passwordless sudo is configured.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Inspect all configured machines instead of one machine. Default: false.",
           },
         },
       },
@@ -302,10 +502,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "monitor_apps",
+      description:
+        "Show installed apps/packages on one machine or compare inventories across all configured machines. " +
+        "Uses brew on macOS and dpkg/snap/flatpak on Linux. " +
+        "Compare mode highlights missing packages, version skew, and root-owned Homebrew installs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local unless all=true or compare=true.",
+          },
+          all: {
+            type: "boolean",
+            description: "Inspect all configured machines instead of one machine. Default: false.",
+          },
+          compare: {
+            type: "boolean",
+            description: "Compare app inventories across machines. Enables all=true implicitly.",
+          },
+        },
+      },
+    },
+    {
+      name: "monitor_service",
+      description:
+        "List or control system services and detected dev servers on a machine. " +
+        "Use action='list' to inspect services, or start/stop/restart for systemd, brew services, or launchctl labels. " +
+        "Detected dev servers are listed with live PIDs and ports, and can be stopped by PID-backed entries.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          machine_id: {
+            type: "string",
+            description: "Machine ID. Defaults to local.",
+          },
+          action: {
+            type: "string",
+            enum: ["list", "start", "stop", "restart"],
+            description: "Action to perform. Default: list.",
+          },
+          name: {
+            type: "string",
+            description: "Service name or detected dev server name. Required unless action=list.",
+          },
+        },
+      },
+    },
+    {
       name: "monitor_cron_jobs",
       description:
         "List, add, or toggle scheduled cron jobs. " +
-        "Cron jobs can run shell commands, kill processes, run doctor checks, or prune old data. " +
+        "Cron jobs can run shell commands, kill processes, run doctor checks, prune old data, or send fleet reports. " +
         "Returns CronJobRow[] with id, name, schedule (cron expression), command, action_type, enabled, last_run_at. " +
         "Use action='list' to see all jobs. " +
         "Use action='add' to create a new job (requires name, schedule, command). " +
@@ -337,6 +586,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           command: {
             type: "string",
             description: "Shell command to run (required for add action).",
+          },
+          action_type: {
+            type: "string",
+            enum: ["shell", "kill_process", "restart_process", "doctor", "prune_metrics", "cleanup_zombies", "cleanup_caches", "send_report", "custom"],
+            description: "Built-in action type for add action. Default: shell.",
+          },
+          action_config: {
+            type: "object",
+            description: "Optional JSON configuration for built-in actions.",
+          },
+          enabled: {
+            type: "number",
+            description: "1 to enable, 0 to disable on creation. Default: 1.",
           },
         },
       },
@@ -560,6 +822,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return jsonContent({ machine_id: machineId, runtime_health: runtimeHealth });
       }
 
+      // ── monitor_mcp_status ────────────────────────────────────────────────
+      case "monitor_mcp_status": {
+        let input;
+        try {
+          input = validate(McpStatusInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            all: (a["all"] as boolean | undefined) ?? false,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const results = input.all
+          ? await getMcpProcessStatusAcrossMachines()
+          : [await getMcpProcessStatus(input.machine_id)];
+        return jsonContent(results);
+      }
+
+      // ── monitor_mcp_restart ───────────────────────────────────────────────
+      case "monitor_mcp_restart": {
+        let input;
+        try {
+          input = validate(McpRestartInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            name: a["name"],
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const result = await restartMcpServer(input.name, input.machine_id);
+        return jsonContent(result);
+      }
+
       // ── monitor_processes ─────────────────────────────────────────────────
       case "monitor_processes": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
@@ -602,6 +900,180 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           high_mem_count: report.highMem.length,
           processes: filtered.map(sanitizeProcessRow),
         });
+      }
+
+      // ── monitor_apps ──────────────────────────────────────────────────────
+      case "monitor_apps": {
+        let input;
+        try {
+          input = validate(AppsInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            all: (a["all"] as boolean | undefined) ?? false,
+            compare: (a["compare"] as boolean | undefined) ?? false,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const results = input.all || input.compare
+          ? await listInstalledAppsAcrossMachines()
+          : [await listInstalledApps(input.machine_id)];
+
+        return jsonContent(
+          input.compare
+            ? { results, comparison: compareInstalledApps(results) }
+            : results
+        );
+      }
+
+      // ── monitor_service ───────────────────────────────────────────────────
+      case "monitor_service": {
+        let input;
+        try {
+          input = validate(ServiceInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            action: (a["action"] as string | undefined) ?? "list",
+            name: a["name"],
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        if (input.action === "list") {
+          return jsonContent(await listManagedServices(input.machine_id));
+        }
+
+        return jsonContent(await manageService(input.action, input.name!, input.machine_id));
+      }
+
+      // ── monitor_exec ──────────────────────────────────────────────────────
+      case "monitor_exec": {
+        let execInput;
+        try {
+          execInput = validate(TmuxExecInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            target: a["target"],
+            all: (a["all"] as boolean | undefined) ?? false,
+            command: a["command"],
+            enter: (a["enter"] as boolean | undefined) ?? true,
+            timeout_ms: (a["timeout_ms"] as number | undefined) ?? 3_000,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const collector = getCollectorForMachine(execInput.machine_id);
+        const result = await executeTmuxCommand(collector, {
+          target: execInput.target,
+          all: execInput.all,
+          command: execInput.command,
+          enter: execInput.enter,
+          timeoutMs: execInput.timeout_ms,
+        });
+
+        return jsonContent({
+          machine_id: execInput.machine_id,
+          ...result,
+        });
+      }
+
+      // ── monitor_ports ─────────────────────────────────────────────────────
+      case "monitor_ports": {
+        let input;
+        try {
+          input = validate(PortsInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            all: (a["all"] as boolean | undefined) ?? false,
+            protocol: a["protocol"],
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const results = input.all
+          ? await scanListeningPortsAcrossMachines()
+          : [await scanListeningPorts(input.machine_id)];
+
+        return jsonContent(
+          results.map((result) => ({
+            ...result,
+            ports: input.protocol
+              ? result.ports.filter((port) => port.protocol === input.protocol)
+              : result.ports,
+          }))
+        );
+      }
+
+      // ── monitor_tailscale ─────────────────────────────────────────────────
+      case "monitor_tailscale": {
+        let input;
+        try {
+          input = validate(TailscaleInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            all: (a["all"] as boolean | undefined) ?? false,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const results = input.all
+          ? await getTailscaleStatusAcrossMachines()
+          : [await getTailscaleStatus(input.machine_id)];
+
+        return jsonContent(results);
+      }
+
+      // ── monitor_temperature ───────────────────────────────────────────────
+      case "monitor_temperature": {
+        let input;
+        try {
+          input = validate(TemperatureInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            all: (a["all"] as boolean | undefined) ?? false,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const results = input.all
+          ? await getTemperatureStatusAcrossMachines()
+          : [await getTemperatureStatus(input.machine_id)];
+
+        return jsonContent(results);
+      }
+
+      // ── monitor_containers ────────────────────────────────────────────────
+      case "monitor_containers": {
+        const machineId = (a["machine_id"] as string | undefined) ?? "local";
+        const all = (a["all"] as boolean | undefined) ?? false;
+        const results = all
+          ? await listContainersAcrossMachines()
+          : [await listContainers(machineId)];
+        return jsonContent(results);
+      }
+
+      // ── monitor_container_logs ────────────────────────────────────────────
+      case "monitor_container_logs": {
+        let input;
+        try {
+          input = validate(ContainerLogsInputSchema, {
+            machine_id: (a["machine_id"] as string | undefined) ?? "local",
+            container: a["container"],
+            tail: (a["tail"] as number | undefined) ?? 100,
+          });
+        } catch (e) {
+          if (e instanceof ValidationError) return errorContent(e.message);
+          return errorContent(String(e));
+        }
+
+        const result = await getContainerLogs(input.container, input.machine_id, input.tail);
+        return jsonContent(result);
       }
 
       // ── monitor_kill ──────────────────────────────────────────────────────
@@ -732,6 +1204,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 schedule: a["schedule"],
                 command: a["command"],
                 machine_id: (a["machine_id"] as string | undefined) ?? null,
+                action_type: (a["action_type"] as string | undefined) ?? "shell",
+                action_config:
+                  typeof a["action_config"] === "string"
+                    ? a["action_config"]
+                    : a["action_config"] && typeof a["action_config"] === "object"
+                    ? JSON.stringify(a["action_config"])
+                    : undefined,
+                enabled: typeof a["enabled"] === "number" ? a["enabled"] : undefined,
               });
             } catch (e) {
               if (e instanceof ValidationError) return errorContent(e.message);

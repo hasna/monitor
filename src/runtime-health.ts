@@ -12,7 +12,7 @@ const processManager = new ProcessManager();
 
 const CLAUDE_MCP_LIST_COMMAND = "claude mcp list";
 const CLAUDE_MCP_LIST_TIMEOUT_MS = 3_000;
-const TMUX_LIST_PANES_COMMAND =
+export const TMUX_LIST_PANES_COMMAND =
   "tmux list-panes -a -F '#S\t#I\t#P\t#{pane_dead}\t#{pane_current_command}\t#{pane_dead_status}\t#{pane_start_command}'";
 const TMUX_LIST_PANES_TIMEOUT_MS = 1_500;
 

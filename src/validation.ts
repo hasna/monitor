@@ -76,6 +76,105 @@ export const KillInputSchema = z.object({
 
 export type KillInput = z.infer<typeof KillInputSchema>;
 
+export const TmuxExecInputSchema = z
+  .object({
+    machine_id: z.string().min(1, "machine_id is required").default("local"),
+    target: z.string().min(1, "target must not be empty").max(256).optional(),
+    all: z.boolean().default(false),
+    command: z.string().min(1, "command must not be empty").max(4096, "command too long"),
+    enter: z.boolean().default(true),
+    timeout_ms: z.number().int().min(100).max(30_000).default(3_000),
+  })
+  .superRefine((value, ctx) => {
+    if (value.all && value.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: "target cannot be combined with all=true",
+      });
+    }
+
+    if (!value.all && !value.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: "target is required unless all=true",
+      });
+    }
+  });
+
+export type TmuxExecInput = z.infer<typeof TmuxExecInputSchema>;
+
+export const PortsInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  all: z.boolean().default(false),
+  protocol: z.enum(["tcp", "udp"]).optional(),
+});
+
+export type PortsInput = z.infer<typeof PortsInputSchema>;
+
+export const TailscaleInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  all: z.boolean().default(false),
+});
+
+export type TailscaleInput = z.infer<typeof TailscaleInputSchema>;
+
+export const TemperatureInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  all: z.boolean().default(false),
+});
+
+export type TemperatureInput = z.infer<typeof TemperatureInputSchema>;
+
+export const AppsInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  all: z.boolean().default(false),
+  compare: z.boolean().default(false),
+});
+
+export type AppsInput = z.infer<typeof AppsInputSchema>;
+
+export const ServiceInputSchema = z
+  .object({
+    machine_id: z.string().min(1, "machine_id is required").default("local"),
+    action: z.enum(["list", "start", "stop", "restart"]).default("list"),
+    name: z.string().min(1, "name must not be empty").max(256, "name too long").optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.action !== "list" && !value.name) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["name"],
+        message: "name is required unless action=list",
+      });
+    }
+  });
+
+export type ServiceInput = z.infer<typeof ServiceInputSchema>;
+
+export const McpStatusInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  all: z.boolean().default(false),
+});
+
+export type McpStatusInput = z.infer<typeof McpStatusInputSchema>;
+
+export const McpRestartInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  name: z.string().min(1, "name is required").max(256, "name too long"),
+});
+
+export type McpRestartInput = z.infer<typeof McpRestartInputSchema>;
+
+export const ContainerLogsInputSchema = z.object({
+  machine_id: z.string().min(1, "machine_id is required").default("local"),
+  container: z.string().min(1, "container is required"),
+  tail: z.number().int().min(1).max(10_000).default(100),
+});
+
+export type ContainerLogsInput = z.infer<typeof ContainerLogsInputSchema>;
+
 export const CronJobInputSchema = z.object({
   name: z.string().min(1, "name must not be empty").max(128, "name too long"),
   schedule: z.string().refine(isValidCronExpression, {
@@ -84,7 +183,17 @@ export const CronJobInputSchema = z.object({
   command: z.string().min(1, "command must not be empty").max(2048, "command too long"),
   machine_id: z.string().min(1).max(64).nullable().optional(),
   action_type: z
-    .enum(["shell", "kill_process", "restart_process", "doctor", "custom"])
+    .enum([
+      "shell",
+      "kill_process",
+      "restart_process",
+      "doctor",
+      "prune_metrics",
+      "cleanup_zombies",
+      "cleanup_caches",
+      "send_report",
+      "custom",
+    ])
     .default("shell"),
   action_config: z.string().optional(),
   enabled: z.number().int().min(0).max(1).optional(),

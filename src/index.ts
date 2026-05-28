@@ -84,6 +84,74 @@ export type {
 export { search } from "./db/search.js";
 export type { SearchResult } from "./db/search.js";
 
+// ── Ports ─────────────────────────────────────────────────────────────────────
+
+export {
+  compareInstalledApps,
+  listInstalledApps,
+  listInstalledAppsAcrossMachines,
+  parseInstalledAppsOutput,
+} from "./apps.js";
+export type { InstalledApp, InstalledAppsResult, AppComparison } from "./apps.js";
+
+export {
+  detectDevServices,
+  listManagedServices,
+  listManagedServicesAcrossMachines,
+  manageService,
+  parseServicesOutput,
+} from "./services.js";
+export type {
+  ManagedService,
+  ServiceAction,
+  ServiceActionResult,
+  ServiceListResult,
+  ServiceManager,
+  ServiceStatus,
+} from "./services.js";
+
+export {
+  buildMcpProcessStatuses,
+  getMcpProcessStatus,
+  getMcpProcessStatusAcrossMachines,
+  matchProcessToMcpServer,
+  restartMcpServer,
+} from "./mcp-processes.js";
+export type { McpProcessStatus, McpProcessStatusResult, McpRestartResult } from "./mcp-processes.js";
+
+export {
+  getContainerLogs,
+  listContainers,
+  listContainersAcrossMachines,
+  normaliseContainers,
+  parseContainerCommandOutput,
+} from "./containers.js";
+export type { ContainerInfo, ContainersResult, ContainerLogsResult } from "./containers.js";
+
+export {
+  parseLsofListeningPorts,
+  parseListeningPortsOutput,
+  parseSsListeningPorts,
+  scanListeningPorts,
+  scanListeningPortsAcrossMachines,
+} from "./ports.js";
+export type { ListeningPort, ListeningPortsResult } from "./ports.js";
+
+export {
+  getTailscaleStatus,
+  getTailscaleStatusAcrossMachines,
+  parseTailscalePingOutput,
+  parseTailscaleStatusOutput,
+} from "./tailscale.js";
+export type { TailscalePeerStatus, TailscaleStatusResult } from "./tailscale.js";
+
+export {
+  getTemperatureStatus,
+  getTemperatureStatusAcrossMachines,
+  parseTemperatureOutput,
+} from "./temperature.js";
+export type { FanReading, TemperatureResult, ThermalReading } from "./temperature.js";
+
 // ── Collectors ────────────────────────────────────────────────────────────────
 
 export { LocalCollector } from "./collectors/local.js";
@@ -128,6 +196,25 @@ export type {
 
 export { CronEngine } from "./cron/index.js";
 export type { CronJob, CronResult } from "./cron/index.js";
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+export {
+  REPORT_PERIODS,
+  buildFleetHealthReport,
+  formatFleetHealthReportHtml,
+  formatFleetHealthReportMachineLine,
+  formatFleetHealthReportSummary,
+  formatFleetHealthReportText,
+  getFleetHealthReportSubject,
+  getReportSchedule,
+} from "./report.js";
+export type {
+  ReportPeriod,
+  FleetHealthReport,
+  FleetReportMachineSummary,
+  FleetReportProcessSummary,
+} from "./report.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

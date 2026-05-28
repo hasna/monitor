@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
@@ -12,16 +12,37 @@ import {
   listCronJobs,
   insertCronJob,
   getCronJob,
+  updateCronJob,
 } from "../db/queries.js";
 import type { AlertRow } from "../db/schema.js";
 import { search } from "../db/search.js";
 import { CronEngine, runJobAction } from "../cron/index.js";
+import { runReportIntegrations } from "../integrations/index.js";
+import {
+  getContainerLogs,
+  listContainers,
+  listContainersAcrossMachines,
+} from "../containers.js";
+import { compareInstalledApps, listInstalledApps, listInstalledAppsAcrossMachines } from "../apps.js";
+import { listManagedServices, manageService } from "../services.js";
+import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
+import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
+import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
+import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServer } from "../mcp-processes.js";
 import type { KillSignal } from "../process-manager/index.js";
+import {
+  buildFleetHealthReport,
+  formatFleetHealthReportSummary,
+  formatFleetHealthReportText,
+  getReportSchedule,
+  type ReportPeriod,
+} from "../report.js";
 import {
   collectMachineDiagnostics,
   collectRuntimeHealthAcrossMachines,
   mergeStoredAndLiveAlerts,
 } from "../runtime-health.js";
+import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
@@ -65,6 +86,93 @@ function statusColor(status: string): string {
   if (status === "online") return chalk.green(status);
   if (status === "offline") return chalk.red(status);
   return chalk.dim(status);
+}
+
+function parseReportPeriod(value: string): ReportPeriod {
+  if (value === "daily" || value === "weekly") {
+    return value;
+  }
+  throw new InvalidOptionArgumentError("report period must be 'daily' or 'weekly'");
+}
+
+async function renderInstalledApps(
+  machineArg: string | undefined,
+  opts: { all?: boolean; compare?: boolean; json?: boolean },
+  forceCompare = false
+) {
+  const shouldCompare = Boolean(opts.compare || forceCompare);
+  const shouldScanAll = Boolean(opts.all || shouldCompare);
+  const results = shouldScanAll
+    ? await listInstalledAppsAcrossMachines()
+    : [await listInstalledApps(machineArg ?? "local")];
+
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        shouldCompare
+          ? { results, comparison: compareInstalledApps(results) }
+          : results,
+        null,
+        2
+      )
+    );
+    return;
+  }
+
+  console.log();
+  if (shouldCompare) {
+    const comparison = compareInstalledApps(results);
+    if (comparison.length === 0) {
+      console.log(chalk.green("  No cross-machine app differences detected."));
+      console.log();
+      return;
+    }
+
+    for (const entry of comparison) {
+      const issueBits = [
+        entry.missingOn.length > 0 ? `missing on ${entry.missingOn.join(", ")}` : null,
+        new Set(Object.values(entry.versionsByMachine).filter(Boolean)).size > 1
+          ? `version skew ${Object.entries(entry.versionsByMachine)
+              .map(([machineId, version]) => `${machineId}:${version ?? "-"}`)
+              .join(", ")}`
+          : null,
+        entry.rootOwnedOn.length > 0 ? `root-owned on ${entry.rootOwnedOn.join(", ")}` : null,
+      ].filter(Boolean);
+
+      console.log(
+        `  ${entry.manager}/${entry.kind} ${entry.name} ${chalk.dim(`(${issueBits.join(" | ")})`)}`
+      );
+    }
+    console.log();
+    return;
+  }
+
+  for (const result of results) {
+    console.log(chalk.bold(`  ${result.machineId}`));
+    if (!result.ok) {
+      console.log(chalk.red(`    ${result.error ?? "app inventory failed"}`));
+      console.log();
+      continue;
+    }
+
+    if (result.apps.length === 0) {
+      console.log(chalk.dim("    No apps/packages found."));
+      console.log();
+      continue;
+    }
+
+    console.log(
+      chalk.dim(
+        `    ${"NAME".padEnd(28)} ${"MANAGER".padEnd(10)} ${"KIND".padEnd(9)} ${"VERSION".padEnd(18)} ${"OWNER".padEnd(10)} ROOT`
+      )
+    );
+    for (const app of result.apps) {
+      console.log(
+        `    ${app.name.slice(0, 28).padEnd(28)} ${app.manager.padEnd(10)} ${app.kind.padEnd(9)} ${(app.version ?? "-").slice(0, 18).padEnd(18)} ${(app.owner ?? "-").slice(0, 10).padEnd(10)} ${app.rootOwned ? "yes" : "no"}`
+      );
+    }
+    console.log();
+  }
 }
 
 // ── Program ───────────────────────────────────────────────────────────────────
@@ -446,6 +554,152 @@ program
     }
   });
 
+// ── monitor mcp-status [machine] ─────────────────────────────────────────────
+
+program
+  .command("mcp-status [machine]")
+  .description("Show MCP server health with matched process PIDs, memory, and uptime")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const results = opts.all
+      ? await getMcpProcessStatusAcrossMachines()
+      : [await getMcpProcessStatus(machineArg ?? "local")];
+
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of results) {
+      console.log(chalk.bold(`  ${result.machineId}`));
+      if (!result.ok && result.error) {
+        console.log(chalk.red(`    ${result.error}`));
+        console.log();
+        continue;
+      }
+
+      if (result.servers.length === 0) {
+        console.log(chalk.dim("    No MCP servers found."));
+        console.log();
+        continue;
+      }
+
+      console.log(chalk.dim(`    checked: ${result.checkedAt}`));
+      console.log(chalk.dim(`    ${"NAME".padEnd(18)} ${"STATUS".padEnd(10)} ${"PIDS".padEnd(16)} ${"MEM".padEnd(10)} UPTIME`));
+      for (const server of result.servers) {
+        console.log(
+          `    ${server.name.padEnd(18)} ${server.status.padEnd(10)} ${(server.pids.join(",") || "-").padEnd(16)} ${`${server.memoryMb.toFixed(1)}MB`.padEnd(10)} ${server.uptimeSeconds === null ? "-" : `${Math.round(server.uptimeSeconds)}s`}`
+        );
+      }
+      console.log();
+    }
+  });
+
+// ── monitor mcp-restart <name> ───────────────────────────────────────────────
+
+program
+  .command("mcp-restart <name>")
+  .description("Restart a matched MCP process if one is running, then re-check health")
+  .option("-m, --machine <id>", "Machine ID", "local")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (name: string, opts) => {
+    const result = await restartMcpServer(name, opts.machine ?? "local");
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log();
+    console.log(chalk.bold(`  ${result.machineId} / ${name}`));
+    if (!result.ok) {
+      console.log(chalk.red(`    ${result.error ?? "restart failed"}`));
+      console.log();
+      process.exit(1);
+    }
+
+    console.log(chalk.green(`    restart check passed; killed PIDs: ${result.killedPids.join(", ") || "none"}`));
+    if (result.after) {
+      console.log(
+        chalk.dim(
+          `    status: ${result.after.status}  |  pids: ${result.after.pids.join(", ") || "-"}  |  mem: ${result.after.memoryMb.toFixed(1)}MB`
+        )
+      );
+    }
+    console.log();
+  });
+
+// ── monitor exec [target] <command> ──────────────────────────────────────────
+
+program
+  .command("exec [target] <command>")
+  .description("Send a command to a tmux pane, window, or all panes on a machine")
+  .option("-m, --machine <id>", "Machine ID", "local")
+  .option("-a, --all", "Broadcast to all tmux panes on the selected machine")
+  .option("--no-enter", "Type the command without pressing Enter")
+  .option("--timeout-ms <ms>", "Command timeout in milliseconds", "3000")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (target: string | undefined, command: string, opts) => {
+    if (opts.all && target) {
+      console.error(chalk.red("  target cannot be used together with --all"));
+      process.exit(1);
+    }
+
+    if (!opts.all && !target) {
+      console.error(chalk.red("  target is required unless --all is set"));
+      process.exit(1);
+    }
+
+    const timeoutMs = parseInt(opts.timeoutMs, 10);
+    if (Number.isNaN(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) {
+      console.error(chalk.red("  timeout-ms must be an integer between 100 and 30000"));
+      process.exit(1);
+    }
+
+    const collector = getCollectorForMachine(opts.machine ?? "local");
+    const result = await executeTmuxCommand(collector, {
+      target,
+      all: opts.all ?? false,
+      command,
+      enter: opts.enter ?? true,
+      timeoutMs,
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        machine_id: opts.machine ?? "local",
+        ...result,
+      }, null, 2));
+      if (!result.ok) process.exit(1);
+      return;
+    }
+
+    console.log();
+    console.log(
+      chalk.bold(`  Machine: ${opts.machine ?? "local"}`) +
+      chalk.dim(`  |  Mode: ${result.mode}  |  Targets: ${result.target_count}`)
+    );
+
+    if (!result.ok && result.error) {
+      console.log(chalk.red(`  Error: ${result.error}`));
+    }
+
+    if (result.targets.length > 0) {
+      for (const targetResult of result.targets) {
+        const icon = targetResult.ok ? chalk.green("✓") : chalk.red("✗");
+        const detail = targetResult.ok
+          ? chalk.dim(`exit ${targetResult.exitCode ?? 0} in ${targetResult.durationMs}ms`)
+          : ((targetResult.error ?? targetResult.stderr) || "tmux send-keys failed");
+        console.log(`  ${icon} ${targetResult.target}  ${detail}`);
+      }
+    }
+
+    console.log();
+    if (!result.ok) process.exit(1);
+  });
+
 // ── monitor kill <pid> ────────────────────────────────────────────────────────
 
 program
@@ -530,6 +784,437 @@ program
     console.log();
   });
 
+// ── monitor apps [machine] ────────────────────────────────────────────────────
+
+program
+  .command("apps [machine]")
+  .description("Show installed apps/packages or compare them across machines")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-c, --compare", "Compare installed apps across machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    await renderInstalledApps(machineArg, opts);
+  });
+
+program
+  .command("compare-apps")
+  .description("Compare installed apps across all configured machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (opts) => {
+    await renderInstalledApps(undefined, opts, true);
+  });
+
+program
+  .command("service <action> [name]")
+  .description("List or control system services and detected dev servers")
+  .option("-m, --machine <id>", "Machine ID", "local")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (action: string, name: string | undefined, opts) => {
+    const machineId = opts.machine ?? "local";
+
+    if (!["list", "start", "stop", "restart"].includes(action)) {
+      console.error(chalk.red("  action must be one of: list, start, stop, restart"));
+      process.exit(1);
+    }
+
+    if (action === "list") {
+      const result = await listManagedServices(machineId);
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log();
+      console.log(chalk.bold(`  ${machineId}`));
+      if (!result.ok) {
+        console.log(chalk.red(`    ${result.error ?? "service inspection failed"}`));
+        console.log();
+        process.exit(1);
+      }
+
+      if (result.services.length === 0) {
+        console.log(chalk.dim("    No services found."));
+        console.log();
+        return;
+      }
+
+      console.log(chalk.dim(`    ${"NAME".padEnd(28)} ${"MANAGER".padEnd(12)} ${"STATUS".padEnd(10)} ${"PIDS".padEnd(16)} PORTS`));
+      for (const service of result.services) {
+        console.log(
+          `    ${service.name.slice(0, 28).padEnd(28)} ${service.manager.padEnd(12)} ${service.status.padEnd(10)} ${(service.pids.join(",") || "-").padEnd(16)} ${service.ports.join(",") || "-"}`
+        );
+      }
+      console.log();
+      return;
+    }
+
+    if (!name) {
+      console.error(chalk.red("  name is required unless action=list"));
+      process.exit(1);
+    }
+
+    const result = await manageService(action as "start" | "stop" | "restart", name, machineId);
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exit(1);
+      return;
+    }
+
+    console.log();
+    console.log(chalk.bold(`  ${machineId} / ${result.name}`));
+    if (!result.ok) {
+      console.log(chalk.red(`    ${result.error ?? `service ${action} failed`}`));
+      console.log();
+      process.exit(1);
+    }
+
+    console.log(chalk.green(`    ${action} check passed`));
+    if (result.after) {
+      console.log(
+        chalk.dim(
+          `    manager: ${result.after.manager}  |  status: ${result.after.status}  |  pids: ${result.after.pids.join(", ") || "-"}  |  ports: ${result.after.ports.join(", ") || "-"}`
+        )
+      );
+    }
+    console.log();
+  });
+
+program
+  .command("temperature [machine]")
+  .description("Show CPU/GPU temperatures, fan speeds, and thermal alerts")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const results = opts.all
+      ? await getTemperatureStatusAcrossMachines()
+      : [await getTemperatureStatus(machineArg ?? "local")];
+
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of results) {
+      console.log(chalk.bold(`  ${result.machineId}`));
+      if (!result.ok) {
+        console.log(chalk.red(`    ${result.error ?? "temperature inspection failed"}`));
+        console.log();
+        continue;
+      }
+
+      if (result.maxTemperatureC !== null) {
+        console.log(
+          chalk.dim(
+            `    max: ${result.maxTemperatureC.toFixed(1)}C  |  throttling likely: ${result.throttlingLikely ? "yes" : "no"}`
+          )
+        );
+      }
+
+      if (result.cpu.length > 0) {
+        console.log(chalk.dim("    CPU"));
+        for (const reading of result.cpu) {
+          console.log(`      ${reading.label}: ${reading.temperatureC.toFixed(1)}C`);
+        }
+      }
+
+      if (result.gpu.length > 0) {
+        console.log(chalk.dim("    GPU"));
+        for (const reading of result.gpu) {
+          console.log(`      ${reading.label}: ${reading.temperatureC.toFixed(1)}C`);
+        }
+      }
+
+      if (result.fans.length > 0) {
+        console.log(chalk.dim("    Fans"));
+        for (const fan of result.fans) {
+          console.log(`      ${fan.label}: ${fan.rpm === null ? "-" : `${Math.round(fan.rpm)} rpm`}`);
+        }
+      }
+
+      if (result.alerts.length > 0) {
+        console.log(chalk.yellow("    Alerts"));
+        for (const alert of result.alerts) {
+          console.log(chalk.yellow(`      ${alert}`));
+        }
+      }
+
+      console.log();
+    }
+  });
+
+// ── monitor ports [machine] ───────────────────────────────────────────────────
+
+program
+  .command("ports [machine]")
+  .description("Show listening TCP/UDP ports on one machine or across all machines")
+  .option("-a, --all", "Scan all configured machines")
+  .option("-p, --protocol <protocol>", "Filter by protocol: tcp|udp")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const protocol = opts.protocol as string | undefined;
+    if (protocol && protocol !== "tcp" && protocol !== "udp") {
+      console.error(chalk.red("  protocol must be tcp or udp"));
+      process.exit(1);
+    }
+
+    const results = opts.all
+      ? await scanListeningPortsAcrossMachines()
+      : [await scanListeningPorts(machineArg ?? "local")];
+
+    const filtered = results.map((result) => ({
+      ...result,
+      ports: protocol ? result.ports.filter((port) => port.protocol === protocol) : result.ports,
+    }));
+
+    if (opts.json) {
+      console.log(JSON.stringify(filtered, null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of filtered) {
+      console.log(chalk.bold(`  ${result.machineId}`));
+      if (!result.ok) {
+        console.log(chalk.red(`    ${result.error ?? "scan failed"}`));
+        console.log();
+        continue;
+      }
+
+      if (result.ports.length === 0) {
+        console.log(chalk.dim("    No listening ports found."));
+        console.log();
+        continue;
+      }
+
+      console.log(chalk.dim(`    ${"PORT".padEnd(8)} ${"PROTO".padEnd(6)} ${"HOST".padEnd(24)} ${"PID".padEnd(8)} PROCESS`));
+      for (const port of result.ports) {
+        console.log(
+          `    ${String(port.port).padEnd(8)} ${port.protocol.padEnd(6)} ${port.host.padEnd(24)} ${String(port.pid ?? "-").padEnd(8)} ${port.process ?? "-"}`
+        );
+      }
+      console.log();
+    }
+  });
+
+// ── monitor tailscale [machine] ───────────────────────────────────────────────
+
+program
+  .command("tailscale [machine]")
+  .description("Show Tailscale peer status, IPs, health, and peer latency")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const results = opts.all
+      ? await getTailscaleStatusAcrossMachines()
+      : [await getTailscaleStatus(machineArg ?? "local")];
+
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of results) {
+      console.log(
+        chalk.bold(`  ${result.machineId}`) +
+          chalk.dim(
+            ` (${result.tailnet ?? "unknown tailnet"}${result.backendState ? ` | ${result.backendState}` : ""})`
+          )
+      );
+
+      if (!result.ok) {
+        console.log(chalk.red(`    ${result.error ?? "tailscale inspection failed"}`));
+        console.log();
+        continue;
+      }
+
+      if (result.self) {
+        console.log(
+          chalk.dim(
+            `    self: ${result.self.hostname} ${result.self.os ?? "-"}  ${result.self.tailscaleIps.join(", ") || "-"}`
+          )
+        );
+      }
+
+      if (result.health.length > 0) {
+        for (const message of result.health) {
+          console.log(chalk.yellow(`    health: ${message}`));
+        }
+      }
+
+      if (result.peers.length === 0) {
+        console.log(chalk.dim("    No Tailscale peers found."));
+        console.log();
+        continue;
+      }
+
+      console.log(
+        chalk.dim(
+          `    ${"HOST".padEnd(16)} ${"OS".padEnd(8)} ${"ONLINE".padEnd(8)} ${"LATENCY".padEnd(10)} ${"ROUTE".padEnd(20)} IPS`
+        )
+      );
+      for (const peer of result.peers) {
+        console.log(
+          `    ${peer.hostname.padEnd(16)} ${(peer.os ?? "-").padEnd(8)} ${String(peer.online).padEnd(8)} ${((peer.latencyMs === null ? "-" : `${peer.latencyMs.toFixed(0)}ms`)).padEnd(10)} ${(peer.latencyRoute ?? "-").slice(0, 20).padEnd(20)} ${peer.tailscaleIps.join(", ") || "-"}`
+        );
+      }
+      console.log();
+    }
+  });
+
+// ── monitor containers [machine] ──────────────────────────────────────────────
+
+program
+  .command("containers [machine]")
+  .description("Show container status/resources or fetch container logs")
+  .option("-a, --all", "Inspect all configured machines")
+  .option("-l, --logs <container>", "Fetch logs for a specific container")
+  .option("-t, --tail <lines>", "Number of log lines to fetch", "100")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArg: string | undefined, opts) => {
+    const tail = Number.parseInt(opts.tail, 10);
+    if (!Number.isFinite(tail) || tail < 1) {
+      console.error(chalk.red("  tail must be a positive integer"));
+      process.exit(1);
+    }
+
+    if (opts.logs && opts.all) {
+      console.error(chalk.red("  --logs cannot be combined with --all"));
+      process.exit(1);
+    }
+
+    if (opts.logs) {
+      const result = await getContainerLogs(opts.logs, machineArg ?? "local", tail);
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      if (!result.ok) {
+        console.error(chalk.red(`  ${result.error ?? "Unable to fetch logs"}`));
+        process.exit(1);
+      }
+      console.log(result.logs || chalk.dim("  (no logs returned)"));
+      return;
+    }
+
+    const results = opts.all
+      ? await listContainersAcrossMachines()
+      : [await listContainers(machineArg ?? "local")];
+
+    if (opts.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    console.log();
+    for (const result of results) {
+      console.log(chalk.bold(`  ${result.machineId}`) + (result.runtime ? chalk.dim(` (${result.runtime})`) : ""));
+      if (!result.ok) {
+        console.log(chalk.red(`    ${result.error ?? "container inspection failed"}`));
+        console.log();
+        continue;
+      }
+      if (result.containers.length === 0) {
+        console.log(chalk.dim("    No containers found."));
+        console.log();
+        continue;
+      }
+
+      console.log(
+        chalk.dim(
+          `    ${"NAME".padEnd(18)} ${"IMAGE".padEnd(18)} ${"STATUS".padEnd(20)} ${"CPU".padEnd(10)} ${"MEM".padEnd(18)} PORTS`
+        )
+      );
+      for (const container of result.containers) {
+        console.log(
+          `    ${container.name.padEnd(18)} ${(container.image ?? "-").slice(0, 18).padEnd(18)} ${(container.status ?? "-").slice(0, 20).padEnd(20)} ${(container.cpuPercent ?? "-").padEnd(10)} ${(container.memUsage ?? "-").slice(0, 18).padEnd(18)} ${container.ports ?? "-"}`
+        );
+      }
+      console.log();
+    }
+  });
+
+// ── monitor report ────────────────────────────────────────────────────────────
+
+program
+  .command("report")
+  .description("Build or schedule a daily/weekly fleet health report")
+  .option("-p, --period <period>", "Report window: daily|weekly", parseReportPeriod, "daily")
+  .option("-s, --send", "Send the report via configured conversations/emails integrations")
+  .option("--schedule <period>", "Create or update a scheduled report job", parseReportPeriod)
+  .option("-j, --json", "Output raw JSON")
+  .action(async (opts) => {
+    const scheduledPeriod = opts.schedule as ReportPeriod | undefined;
+
+    if (scheduledPeriod) {
+      const name = `${scheduledPeriod}-health-report`;
+      const schedule = getReportSchedule(scheduledPeriod);
+      const actionConfig = JSON.stringify({
+        period: scheduledPeriod,
+        conversations: true,
+        emails: true,
+      });
+      const command = `monitor report --period ${scheduledPeriod} --send`;
+      const existing = listCronJobs().find(
+        (job) => job.name === name && job.action_type === "send_report"
+      );
+
+      if (existing) {
+        updateCronJob(existing.id, {
+          schedule,
+          command,
+          action_type: "send_report",
+          action_config: actionConfig,
+          enabled: 1,
+        });
+        console.log(chalk.green(`  Updated scheduled ${scheduledPeriod} report (job ${existing.id})`));
+      } else {
+        const id = insertCronJob({
+          machine_id: null,
+          name,
+          schedule,
+          command,
+          action_type: "send_report",
+          action_config: actionConfig,
+          enabled: 1,
+          last_run_at: null,
+          last_run_status: null,
+        });
+        console.log(chalk.green(`  Scheduled ${scheduledPeriod} report created (job ${id})`));
+      }
+
+      console.log(chalk.dim(`  Cron: ${schedule}`));
+      return;
+    }
+
+    const period = opts.period as ReportPeriod;
+    const report = await buildFleetHealthReport({ period });
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log();
+      console.log(formatFleetHealthReportText(report));
+      console.log();
+      console.log(chalk.dim(`  Summary: ${formatFleetHealthReportSummary(report)}`));
+    }
+
+    if (!opts.send) {
+      return;
+    }
+
+    const delivered = await runReportIntegrations(report, loadConfig().integrations ?? {});
+    if (delivered.length === 0) {
+      console.error(
+        chalk.red("  No enabled conversations or emails integrations are configured for report delivery.")
+      );
+      process.exit(1);
+    }
+
+    console.log(chalk.green(`  Delivered via ${delivered.join(", ")}`));
+  });
+
 // ── monitor cron ──────────────────────────────────────────────────────────────
 
 const cronCmd = program.command("cron").description("Manage cron jobs");
@@ -571,6 +1256,8 @@ cronCmd
   .command("add <name> <schedule> <command>")
   .description("Add a new cron job")
   .option("-m, --machine <id>", "Machine ID (null = all machines)")
+  .option("--action-type <type>", "Built-in action type", "shell")
+  .option("--action-config <json>", "JSON action config")
   .action((name: string, schedule: string, command: string, opts) => {
     try {
       const id = insertCronJob({
@@ -578,8 +1265,8 @@ cronCmd
         name,
         schedule,
         command,
-        action_type: "shell",
-        action_config: "{}",
+        action_type: opts.actionType,
+        action_config: opts.actionConfig ?? "{}",
         enabled: 1,
         last_run_at: null,
         last_run_status: null,
