@@ -29,9 +29,8 @@ async function main() {
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).
-  const { runMigrations } = await import("../src/db/client.js");
-  runMigrations();
-
+  // Migrations are deferred to lazy DB init so the server can boot even if the
+  // bundled migrations dir is not adjacent to the bin file.
   const handle = await startMcpHttpServer(buildServer, {
     port: resolveMcpHttpPort(args, process.env),
   });
