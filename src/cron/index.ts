@@ -3,10 +3,13 @@ import { execSync } from "child_process";
 import { existsSync, readdirSync, statSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { loadConfig } from "../config.js";
 import type { CronJobRow, CronRunRow } from "../db/schema.js";
 import { logCronRun, pruneOldMetrics, pruneOldProcesses, pruneOldAlerts, pruneOldCronRuns } from "../db/queries.js";
 import { runRetention, DEFAULT_RETENTION, type RetentionConfig } from "../db/retention.js";
+import { runReportIntegrations } from "../integrations/index.js";
 import { ProcessManager } from "../process-manager/index.js";
+import { buildFleetHealthReport, formatFleetHealthReportSummary } from "../report.js";
 import { collectMachineDiagnostics } from "../runtime-health.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -55,6 +58,7 @@ export type BuiltinActionType =
   | "prune_metrics"
   | "cleanup_zombies"
   | "cleanup_caches"
+  | "send_report"
   | "custom";
 
 type OnRunCallback = (record: CronRunRecord) => void;
@@ -233,6 +237,31 @@ export async function runJobAction(
         : `freed ${kb} KB (${filesRemoved} entries) from ${targets.length} targets${errors.length ? ` | ${errors.length} errors` : ""}`;
 
       return { ok: true, output: summary };
+    }
+
+    case "send_report": {
+      const period = (config["period"] as string | undefined) ?? "daily";
+      if (period !== "daily" && period !== "weekly") {
+        return { ok: false, error: `send_report: invalid period '${period}'` };
+      }
+
+      const report = await buildFleetHealthReport({ period });
+      const delivered = await runReportIntegrations(report, loadConfig().integrations ?? {}, {
+        conversations: (config["conversations"] as boolean | undefined) ?? true,
+        emails: (config["emails"] as boolean | undefined) ?? true,
+      });
+
+      if (delivered.length === 0) {
+        return {
+          ok: false,
+          error: "send_report: no enabled conversations/emails integrations configured",
+        };
+      }
+
+      return {
+        ok: true,
+        output: `${formatFleetHealthReportSummary(report)} delivered_via=${delivered.join(",")}`,
+      };
     }
 
     default: {

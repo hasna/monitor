@@ -7,6 +7,7 @@
 
 import type { AlertRow } from "../db/schema.js";
 import type { DoctorReport } from "../doctor/index.js";
+import type { FleetHealthReport } from "../report.js";
 
 // ── Config types ──────────────────────────────────────────────────────────────
 
@@ -47,6 +48,11 @@ export interface IntegrationConfig {
   conversations?: ConversationsIntegrationConfig;
   mementos?: MementosIntegrationConfig;
   emails?: EmailsIntegrationConfig;
+}
+
+export interface ReportIntegrationOptions {
+  conversations?: boolean;
+  emails?: boolean;
 }
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -100,4 +106,43 @@ export async function runIntegrations(
   }
 
   await Promise.allSettled(jobs);
+}
+
+export async function runReportIntegrations(
+  report: FleetHealthReport,
+  config: IntegrationConfig,
+  options: ReportIntegrationOptions = {}
+): Promise<string[]> {
+  const { postReportToSpace } = await import("./conversations.js");
+  const { sendReportEmail } = await import("./emails.js");
+
+  const delivered: string[] = [];
+  const jobs: Promise<void>[] = [];
+
+  if ((options.conversations ?? true) && config.conversations?.enabled) {
+    jobs.push(
+      postReportToSpace(report, config.conversations)
+        .then(() => {
+          delivered.push("conversations");
+        })
+        .catch((err) => {
+          console.error("[monitor:integrations:conversations] report error:", err);
+        })
+    );
+  }
+
+  if ((options.emails ?? true) && config.emails?.enabled) {
+    jobs.push(
+      sendReportEmail(report, config.emails)
+        .then(() => {
+          delivered.push("emails");
+        })
+        .catch((err) => {
+          console.error("[monitor:integrations:emails] report error:", err);
+        })
+    );
+  }
+
+  await Promise.allSettled(jobs);
+  return delivered.sort();
 }

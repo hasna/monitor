@@ -6,6 +6,8 @@
  */
 
 import type { AlertRow } from "../db/schema.js";
+import type { FleetHealthReport } from "../report.js";
+import { formatFleetHealthReportText } from "../report.js";
 import type { ConversationsIntegrationConfig } from "./index.js";
 
 const DEFAULT_BASE_URL = "http://localhost:3001";
@@ -31,14 +33,13 @@ function formatAlertMessage(alert: AlertRow): string {
 }
 
 /**
- * Post an alert message to the configured conversations space.
+ * Post a message to the configured conversations space.
  */
-export async function postAlertToSpace(
-  alert: AlertRow,
+export async function postMessageToSpace(
+  message: string,
   config: ConversationsIntegrationConfig
 ): Promise<void> {
   const base = (config.base_url ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-  const message = formatAlertMessage(alert);
 
   // Try two common API shapes: /api/spaces/:space/messages and /api/messages
   const body = {
@@ -69,8 +70,27 @@ export async function postAlertToSpace(
       throw new Error(`open-conversations API returned ${res2.status}: ${text}`);
     }
   }
+}
 
+/**
+ * Post an alert message to the configured conversations space.
+ */
+export async function postAlertToSpace(
+  alert: AlertRow,
+  config: ConversationsIntegrationConfig
+): Promise<void> {
+  await postMessageToSpace(formatAlertMessage(alert), config);
   console.error(
     `[monitor:integrations:conversations] posted alert for ${alert.machine_id}/${alert.check_name} to space '${config.space_id}'`
+  );
+}
+
+export async function postReportToSpace(
+  report: FleetHealthReport,
+  config: ConversationsIntegrationConfig
+): Promise<void> {
+  await postMessageToSpace(formatFleetHealthReportText(report), config);
+  console.error(
+    `[monitor:integrations:conversations] posted ${report.period} fleet report to space '${config.space_id}'`
   );
 }
