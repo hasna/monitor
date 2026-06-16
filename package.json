@@ -18,7 +18,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features",
     "test": "bun test",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
