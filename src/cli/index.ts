@@ -1,3 +1,4 @@
+import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
@@ -1715,5 +1716,6 @@ completionsCmd
 export { program };
 
 export function runCli(): void {
+  registerEventsCommands(program, { source: "monitor" });
   program.parse(process.argv);
 }
