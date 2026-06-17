@@ -15,8 +15,8 @@ const sampleStatus = {
   },
   Self: {
     ID: "self-1",
-    HostName: "spark01",
-    DNSName: "spark01.taild59be2.ts.net.",
+    HostName: "linux-node-a",
+    DNSName: "linux-node-a.taild59be2.ts.net.",
     OS: "linux",
     TailscaleIPs: ["100.71.123.34"],
     Online: true,
@@ -24,9 +24,9 @@ const sampleStatus = {
   Health: ["Some peers are advertising routes but --accept-routes is false"],
   Peer: {
     "nodekey:1": {
-      ID: "peer-apple03",
-      HostName: "apple03",
-      DNSName: "apple03.taild59be2.ts.net.",
+      ID: "peer-macos-node-b",
+      HostName: "macos-node-b",
+      DNSName: "macos-node-b.taild59be2.ts.net.",
       OS: "macOS",
       TailscaleIPs: ["100.100.226.69"],
       AllowedIPs: ["100.100.226.69/32", "192.168.100.0/24"],
@@ -36,9 +36,9 @@ const sampleStatus = {
       InEngine: true,
     },
     "nodekey:2": {
-      ID: "peer-spark02",
-      HostName: "spark02",
-      DNSName: "spark02.taild59be2.ts.net.",
+      ID: "peer-linux-node-b",
+      HostName: "linux-node-b",
+      DNSName: "linux-node-b.taild59be2.ts.net.",
       OS: "linux",
       TailscaleIPs: ["100.85.234.92"],
       Relay: "fra",
@@ -53,18 +53,18 @@ describe("tailscale parsing", () => {
 
     expect(parsed.version).toBe("1.96.4");
     expect(parsed.tailnet).toBe("hasna.com");
-    expect(parsed.self?.hostname).toBe("spark01");
-    expect(parsed.self?.dnsName).toBe("spark01.taild59be2.ts.net");
+    expect(parsed.self?.hostname).toBe("linux-node-a");
+    expect(parsed.self?.dnsName).toBe("linux-node-a.taild59be2.ts.net");
     expect(parsed.peers).toHaveLength(2);
-    expect(parsed.peers[0]).toMatchObject({
-      hostname: "apple03",
-      dnsName: "apple03.taild59be2.ts.net",
+    expect(parsed.peers.find((peer) => peer.hostname === "macos-node-b")).toMatchObject({
+      hostname: "macos-node-b",
+      dnsName: "macos-node-b.taild59be2.ts.net",
       online: true,
     });
   });
 
   it("parses ping latency and route", () => {
-    expect(parseTailscalePingOutput("pong from apple03 (100.100.226.69) via 192.168.100.236:41641 in 32ms")).toEqual({
+    expect(parseTailscalePingOutput("pong from macos-node-b (100.100.226.69) via 192.168.100.236:41641 in 32ms")).toEqual({
       latencyMs: 32,
       latencyRoute: "192.168.100.236:41641",
     });
@@ -87,10 +87,10 @@ describe("tailscale parsing", () => {
           };
         }
 
-        if (command.includes("apple03.taild59be2.ts.net")) {
+        if (command.includes("macos-node-b.taild59be2.ts.net")) {
           return {
             ok: true,
-            stdout: "pong from apple03 (100.100.226.69) via DERP(nue) in 41ms",
+            stdout: "pong from macos-node-b (100.100.226.69) via DERP(nue) in 41ms",
             stderr: "",
             exitCode: 0,
             durationMs: 40,
@@ -111,12 +111,12 @@ describe("tailscale parsing", () => {
     };
 
     const result = await getTailscaleStatus("local", collector);
-    const apple03 = result.peers.find((peer) => peer.hostname === "apple03");
-    const spark02 = result.peers.find((peer) => peer.hostname === "spark02");
+    const macosNodeB = result.peers.find((peer) => peer.hostname === "macos-node-b");
+    const linuxNodeB = result.peers.find((peer) => peer.hostname === "linux-node-b");
 
     expect(result.ok).toBe(true);
-    expect(apple03?.latencyMs).toBe(41);
-    expect(apple03?.latencyRoute).toBe("DERP(nue)");
-    expect(spark02?.latencyMs).toBeNull();
+    expect(macosNodeB?.latencyMs).toBe(41);
+    expect(macosNodeB?.latencyRoute).toBe("DERP(nue)");
+    expect(linuxNodeB?.latencyMs).toBeNull();
   });
 });

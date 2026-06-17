@@ -610,7 +610,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Run a comprehensive health analysis with AI-agent-friendly recommendations. " +
         "This is the best tool to call when a machine may be in trouble. " +
         "Returns a full DoctorReport plus specific actionable recommendations formatted for an AI agent, " +
-        "e.g. 'machine spark01 is at 95% memory — recommend killing process X (PID 12345, using 2.1 GB)'. " +
+        "e.g. 'machine linux-node-a is at 95% memory — recommend killing process X (PID 12345, using 2.1 GB)'. " +
         "Use this for automated triage and to decide what action to take.",
       inputSchema: {
         type: "object",

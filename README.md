@@ -42,7 +42,7 @@ npm install -g @hasna/monitor
 monitor status
 
 # Add a remote SSH machine
-monitor add spark01 --type ssh --host spark01.example.com --user ubuntu --key ~/.ssh/id_ed25519
+monitor add linux-node-a --type ssh --host linux-node-a.example.com --user ubuntu --key ~/.ssh/id_ed25519
 
 # Show all machines
 monitor machines
@@ -171,9 +171,9 @@ monitor <command> [options]
 monitor add mybox
 
 # SSH machine
-monitor add spark01 \
+monitor add linux-node-a \
   --type ssh \
-  --host spark01.example.com \
+  --host linux-node-a.example.com \
   --user ubuntu \
   --key ~/.ssh/id_ed25519 \
   --port 22
@@ -208,7 +208,7 @@ monitor kill 1234 --signal 9
 
 ```bash
 monitor apps                  # local package/app inventory
-monitor apps apple03          # one remote machine
+monitor apps macos-node-b          # one remote machine
 monitor apps --all            # inventories for all configured machines
 monitor apps --compare        # highlight missing/version-skewed/root-owned installs
 monitor compare-apps          # dedicated cross-machine consistency report
@@ -219,7 +219,7 @@ monitor apps --json
 
 ```bash
 monitor service list                       # show system services plus detected dev servers
-monitor service list --machine apple03    # inspect one remote machine
+monitor service list --machine macos-node-b    # inspect one remote machine
 monitor service start postgresql          # systemd / brew / launchctl start
 monitor service restart nginx             # systemd / brew / launchctl restart
 monitor service stop vite:12345           # stop a detected dev server by PID-backed name
@@ -230,7 +230,7 @@ monitor service list --json
 
 ```bash
 monitor temperature            # local thermal snapshot
-monitor temperature spark01    # one remote machine
+monitor temperature linux-node-a    # one remote machine
 monitor temperature --all      # inspect all configured machines
 monitor temperature --json
 ```
@@ -239,7 +239,7 @@ monitor temperature --json
 
 ```bash
 monitor containers                 # local container list
-monitor containers spark01         # remote machine containers
+monitor containers linux-node-a         # remote machine containers
 monitor containers --all           # all configured machines
 monitor containers --logs api      # recent logs for one container
 monitor containers --logs api --tail 200
@@ -250,7 +250,7 @@ monitor containers --json
 
 ```bash
 monitor ports                # local listeners
-monitor ports spark01        # one remote machine
+monitor ports linux-node-a        # one remote machine
 monitor ports --all          # scan all configured machines
 monitor ports --protocol tcp # filter by protocol
 monitor ports --json         # raw JSON output
@@ -260,7 +260,7 @@ monitor ports --json         # raw JSON output
 
 ```bash
 monitor tailscale          # local Tailscale graph
-monitor tailscale spark01  # one remote machine
+monitor tailscale linux-node-a  # one remote machine
 monitor tailscale --all    # inspect all configured machines
 monitor tailscale --json   # raw JSON output
 ```
@@ -306,11 +306,11 @@ Config is stored at `~/.hasna/monitor/config.json`.
       "tags": ["dev"]
     },
     {
-      "id": "spark01",
+      "id": "linux-node-a",
       "label": "Spark Node 01",
       "type": "ssh",
       "ssh": {
-        "host": "spark01.example.com",
+        "host": "linux-node-a.example.com",
         "port": 22,
         "username": "ubuntu",
         "privateKeyPath": "~/.ssh/id_ed25519"

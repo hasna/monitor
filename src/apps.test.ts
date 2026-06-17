@@ -85,7 +85,7 @@ describe("apps parsing", () => {
   it("compares package presence, version skew, and root-owned entries", () => {
     const comparisons = compareInstalledApps([
       {
-        machineId: "apple01",
+        machineId: "macos-node-a",
         ok: true,
         apps: [
           { name: "ghostty", version: "1.0.1", manager: "brew", kind: "formula", owner: "andrei", rootOwned: false },
@@ -93,7 +93,7 @@ describe("apps parsing", () => {
         ],
       },
       {
-        machineId: "spark01",
+        machineId: "linux-node-a",
         ok: true,
         apps: [
           { name: "ghostty", version: "1.0.2", manager: "brew", kind: "formula", owner: "andrei", rootOwned: false },
@@ -107,11 +107,11 @@ describe("apps parsing", () => {
         name: "ghostty",
         manager: "brew",
         kind: "formula",
-        presentOn: ["apple01", "spark01"],
+        presentOn: ["macos-node-a", "linux-node-a"],
         missingOn: [],
         versionsByMachine: {
-          apple01: "1.0.1",
-          spark01: "1.0.2",
+          "macos-node-a": "1.0.1",
+          "linux-node-a": "1.0.2",
         },
         rootOwnedOn: [],
       },
@@ -120,13 +120,13 @@ describe("apps parsing", () => {
         name: "python@3.12",
         manager: "brew",
         kind: "formula",
-        presentOn: ["apple01"],
-        missingOn: ["spark01"],
+        presentOn: ["macos-node-a"],
+        missingOn: ["linux-node-a"],
         versionsByMachine: {
-          apple01: "3.12.9",
-          spark01: null,
+          "macos-node-a": "3.12.9",
+          "linux-node-a": null,
         },
-        rootOwnedOn: ["apple01"],
+        rootOwnedOn: ["macos-node-a"],
       },
     ]);
   });

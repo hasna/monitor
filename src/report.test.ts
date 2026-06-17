@@ -22,8 +22,8 @@ function makeReport(): FleetHealthReport {
     unresolvedAlerts: 1,
     machines: [
       {
-        machineId: "spark01",
-        hostname: "spark01.local",
+        machineId: "linux-node-a",
+        hostname: "linux-node-a.local",
         status: "warn",
         cpuPercent: 65.2,
         memPercent: 82.1,
@@ -38,7 +38,7 @@ function makeReport(): FleetHealthReport {
         ],
       },
       {
-        machineId: "apple03",
+        machineId: "macos-node-b",
         hostname: null,
         status: "error",
         cpuPercent: null,
@@ -61,7 +61,7 @@ describe("report formatting", () => {
 
     expect(getFleetHealthReportSubject(report)).toContain("Daily fleet health report");
     expect(formatFleetHealthReportSummary(report)).toContain("period=daily");
-    expect(formatFleetHealthReportText(report)).toContain("spark01: WARN");
+    expect(formatFleetHealthReportText(report)).toContain("linux-node-a: WARN");
     expect(formatFleetHealthReportText(report)).toContain("Top memory: bun(123, 712 MB, 4.2% CPU)");
     expect(formatFleetHealthReportMachineLine(report.machines[0]!)).toContain("disk_delta=+2.4 GB");
   });
@@ -70,7 +70,7 @@ describe("report formatting", () => {
     const html = formatFleetHealthReportHtml(makeReport());
 
     expect(html).toContain("open-monitor Daily fleet health report");
-    expect(html).toContain("spark01.local");
+    expect(html).toContain("linux-node-a.local");
     expect(html).toContain("ssh timeout &lt;bad&gt;");
   });
 

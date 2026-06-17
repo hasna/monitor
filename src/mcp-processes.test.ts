@@ -7,7 +7,7 @@ describe("mcp process status helpers", () => {
     {
       pid: 123,
       name: "bun",
-      cmd: "bun /home/hasna/.bun/bin/monitor-mcp",
+      cmd: "bun /home/example/.bun/bin/monitor-mcp",
       cpuPercent: 1,
       memMb: 32,
       state: "S",
@@ -34,7 +34,7 @@ describe("mcp process status helpers", () => {
     expect(
       matchProcessToMcpServer(processes[0]!, {
         name: "monitor",
-        command: "/home/hasna/.bun/bin/monitor-mcp",
+        command: "/home/example/.bun/bin/monitor-mcp",
         status: "connected",
         rawStatus: "✓ Connected",
       })
@@ -47,7 +47,7 @@ describe("mcp process status helpers", () => {
         {
           pid: 789,
           name: "node",
-          cmd: "node /home/hasna/.bun/bin/hooks --project mcp-health",
+          cmd: "node /home/example/.bun/bin/hooks --project mcp-health",
           cpuPercent: 0.1,
           memMb: 10,
           state: "S",
@@ -58,7 +58,7 @@ describe("mcp process status helpers", () => {
         },
         {
           name: "monitor",
-          command: "/home/hasna/.bun/bin/monitor-mcp",
+          command: "/home/example/.bun/bin/monitor-mcp",
           status: "connected",
           rawStatus: "✓ Connected",
         }
@@ -71,13 +71,13 @@ describe("mcp process status helpers", () => {
       [
         {
           name: "monitor",
-          command: "/home/hasna/.bun/bin/monitor-mcp",
+          command: "/home/example/.bun/bin/monitor-mcp",
           status: "connected",
           rawStatus: "✓ Connected",
         },
         {
           name: "todos",
-          command: "/home/hasna/.bun/bin/todos-mcp",
+          command: "/home/example/.bun/bin/todos-mcp",
           status: "failed",
           rawStatus: "✗ Failed",
         },
@@ -89,7 +89,7 @@ describe("mcp process status helpers", () => {
     expect(rows).toEqual([
       {
         name: "monitor",
-        command: "/home/hasna/.bun/bin/monitor-mcp",
+        command: "/home/example/.bun/bin/monitor-mcp",
         status: "connected",
         rawStatus: "✓ Connected",
         pids: [123],
@@ -100,7 +100,7 @@ describe("mcp process status helpers", () => {
       },
       {
         name: "todos",
-        command: "/home/hasna/.bun/bin/todos-mcp",
+        command: "/home/example/.bun/bin/todos-mcp",
         status: "failed",
         rawStatus: "✗ Failed",
         pids: [],

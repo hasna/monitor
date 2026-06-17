@@ -38,21 +38,21 @@ describe("parseClaudeMcpListOutput", () => {
   it("parses connected, failed, and unknown MCP server states", () => {
     const output = [
       "Checking MCP server health...",
-      "assistants: /home/hasna/.bun/bin/assistants-mcp  - ✓ Connected",
-      "monitor: /home/hasna/.bun/bin/monitor-mcp  - Failed to connect",
+      "assistants: /home/example/.bun/bin/assistants-mcp  - ✓ Connected",
+      "monitor: /home/example/.bun/bin/monitor-mcp  - Failed to connect",
       "custom: bunx custom-mcp --stdio  - Health check pending",
     ].join("\n");
 
     expect(parseClaudeMcpListOutput(output)).toEqual([
       {
         name: "assistants",
-        command: "/home/hasna/.bun/bin/assistants-mcp",
+        command: "/home/example/.bun/bin/assistants-mcp",
         rawStatus: "✓ Connected",
         status: "connected",
       },
       {
         name: "monitor",
-        command: "/home/hasna/.bun/bin/monitor-mcp",
+        command: "/home/example/.bun/bin/monitor-mcp",
         rawStatus: "Failed to connect",
         status: "failed",
       },
@@ -102,7 +102,7 @@ describe("inspectRuntimeHealth", () => {
   it("treats missing tmux server as healthy and reports connected MCP servers", async () => {
     const collector = makeCollector({
       "claude mcp list": makeCommandResult({
-        stdout: "monitor: /home/hasna/.bun/bin/monitor-mcp  - ✓ Connected\n",
+        stdout: "monitor: /home/example/.bun/bin/monitor-mcp  - ✓ Connected\n",
       }),
       "tmux list-panes -a -F '#S\t#I\t#P\t#{pane_dead}\t#{pane_current_command}\t#{pane_dead_status}\t#{pane_start_command}'":
         makeCommandResult({
@@ -125,8 +125,8 @@ describe("inspectRuntimeHealth", () => {
     const collector = makeCollector({
       "claude mcp list": makeCommandResult({
         stdout: [
-          "monitor: /home/hasna/.bun/bin/monitor-mcp  - ✓ Connected",
-          "hooks: /home/hasna/.bun/bin/hooks mcp --stdio - Failed to connect",
+          "monitor: /home/example/.bun/bin/monitor-mcp  - ✓ Connected",
+          "hooks: /home/example/.bun/bin/hooks mcp --stdio - Failed to connect",
         ].join("\n"),
       }),
       "tmux list-panes -a -F '#S\t#I\t#P\t#{pane_dead}\t#{pane_current_command}\t#{pane_dead_status}\t#{pane_start_command}'":

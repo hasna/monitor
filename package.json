@@ -1,6 +1,6 @@
 {
   "name": "@hasna/monitor",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "System monitoring tool for multiple computers — local, SSH, EC2",
   "type": "module",
   "license": "Apache-2.0",
@@ -18,7 +18,7 @@
   "types": "./src/index.ts",
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features",
+    "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features --external @aws-sdk/* --external node-ssh --external ssh2 --external node-cron",
     "test": "bun test",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",

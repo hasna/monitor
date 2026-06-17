@@ -15,8 +15,8 @@ function makeReport(): FleetHealthReport {
     unresolvedAlerts: 2,
     machines: [
       {
-        machineId: "spark01",
-        hostname: "spark01.local",
+        machineId: "linux-node-a",
+        hostname: "linux-node-a.local",
         status: "critical",
         cpuPercent: 98.2,
         memPercent: 91.4,
