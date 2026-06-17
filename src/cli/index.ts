@@ -45,6 +45,7 @@ import {
 } from "../runtime-health.js";
 import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
+import { getMonitorStatus } from "../status.js";
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
@@ -248,6 +249,31 @@ program
     }
 
     console.log(chalk.dim(`  Processes: ${snap.processes.length}`));
+    console.log();
+  });
+
+// ── monitor health ────────────────────────────────────────────────────────────
+
+program
+  .command("health")
+  .description("Show metadata-only monitor health counts")
+  .option("-j, --json", "Output metadata-only JSON")
+  .option("--probe-services", "Probe managed services and include status counts", false)
+  .action(async (opts: { json?: boolean; probeServices?: boolean }) => {
+    const status = await getMonitorStatus({ probeServices: opts.probeServices === true });
+
+    if (opts.json) {
+      console.log(JSON.stringify(status, null, 2));
+      return;
+    }
+
+    console.log();
+    console.log(chalk.bold("  Monitor Health") + `  ${status.health.status.toUpperCase()}`);
+    console.log(chalk.dim(`  package: ${status.package.version}`));
+    console.log(`  Machines: ${status.counts.machines.configured} configured, ${status.counts.machines.registered} registered`);
+    console.log(`  Services: ${status.counts.services.total} counted, ${status.counts.services.failed} failed`);
+    console.log(`  Alerts:   ${status.counts.alerts.total} total, ${status.counts.alerts.critical} critical`);
+    console.log(`  Cron:     ${status.counts.cronJobs.enabled} enabled, ${status.counts.cronJobs.disabled} disabled`);
     console.log();
   });
 

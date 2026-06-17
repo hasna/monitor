@@ -216,6 +216,11 @@ export type {
   FleetReportProcessSummary,
 } from "./report.js";
 
+// ── Metadata-only status contract ────────────────────────────────────────────
+
+export { buildMonitorStatus, getMonitorStatus } from "./status.js";
+export type { MonitorStatusContract, MonitorStatusSnapshot } from "./status.js";
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 export { loadConfig, saveConfig, migrateConfig, initConfig } from "./config.js";
