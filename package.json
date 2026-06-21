@@ -1,6 +1,6 @@
 {
   "name": "@hasna/monitor",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "System monitoring tool for multiple computers — local, SSH, EC2",
   "type": "module",
   "license": "Apache-2.0",

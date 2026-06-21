@@ -64,6 +64,28 @@ describe("parseClaudeMcpListOutput", () => {
       },
     ]);
   });
+
+  it("does not classify disconnected MCP servers as connected", () => {
+    const output = [
+      "stale: /home/example/.bun/bin/stale-mcp  - Disconnected",
+      "missing: /home/example/.bun/bin/missing-mcp  - Not connected",
+    ].join("\n");
+
+    expect(parseClaudeMcpListOutput(output)).toEqual([
+      {
+        name: "stale",
+        command: "/home/example/.bun/bin/stale-mcp",
+        rawStatus: "Disconnected",
+        status: "failed",
+      },
+      {
+        name: "missing",
+        command: "/home/example/.bun/bin/missing-mcp",
+        rawStatus: "Not connected",
+        status: "failed",
+      },
+    ]);
+  });
 });
 
 describe("parseTmuxPaneListOutput", () => {

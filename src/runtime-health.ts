@@ -118,11 +118,14 @@ export function parseClaudeMcpListOutput(output: string): McpServerHealth[] {
       const command = header.slice(nameDelimiter + 1).trim();
       const normalized = rawStatus.toLowerCase();
       const status =
-        normalized.includes("connected")
-          ? "connected"
-          : normalized.includes("failed") || normalized.includes("error") || normalized.includes("disconnected")
+        normalized.includes("failed") ||
+        normalized.includes("error") ||
+        normalized.includes("disconnected") ||
+        normalized.includes("not connected")
           ? "failed"
-          : "unknown";
+          : normalized.includes("connected")
+            ? "connected"
+            : "unknown";
 
       return [{ name, command, rawStatus, status }];
     });
