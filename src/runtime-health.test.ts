@@ -170,4 +170,26 @@ describe("inspectRuntimeHealth", () => {
     expect(report.checks.find((check) => check.name === "tmux:summary")?.status).toBe("warn");
     expect(report.recommendedActions.some((action) => action.includes("hooks"))).toBe(true);
   });
+
+  it("redacts secret-bearing MCP commands from runtime health output", async () => {
+    const collector = makeCollector({
+      "claude mcp list": makeCommandResult({
+        stdout: "secretsrv: node server.js --api-key runtime-secret - Failed\n",
+      }),
+      "tmux list-panes -a -F '#S\t#I\t#P\t#{pane_dead}\t#{pane_current_command}\t#{pane_dead_status}\t#{pane_start_command}'":
+        makeCommandResult({
+          ok: false,
+          exitCode: 1,
+          stderr: "no server running on /tmp/tmux-1000/default",
+        }),
+    });
+
+    const report = await inspectRuntimeHealth(collector);
+    const serialized = JSON.stringify(report);
+
+    expect(serialized).not.toContain("runtime-secret");
+    expect(report.mcp.rawOutput).toContain("--api-key ***");
+    expect(report.mcp.servers[0]?.command).toContain("--api-key ***");
+    expect(report.recommendedActions.some((action) => action.includes("--api-key ***"))).toBe(true);
+  });
 });

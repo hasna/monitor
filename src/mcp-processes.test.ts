@@ -1,6 +1,20 @@
 import { describe, expect, it } from "bun:test";
+import type { Collector } from "./collectors/index.js";
+import type { CommandResult } from "./collectors/command.js";
 import type { ProcessInfo } from "./collectors/local.js";
-import { buildMcpProcessStatuses, matchProcessToMcpServer } from "./mcp-processes.js";
+import { buildMcpProcessStatuses, getMcpProcessStatus, matchProcessToMcpServer } from "./mcp-processes.js";
+
+function makeCommandResult(overrides: Partial<CommandResult> = {}): CommandResult {
+  return {
+    ok: true,
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+    durationMs: 25,
+    timedOut: false,
+    ...overrides,
+  };
+}
 
 describe("mcp process status helpers", () => {
   const processes: ProcessInfo[] = [
@@ -110,5 +124,68 @@ describe("mcp process status helpers", () => {
         lastHeartbeatAt: null,
       },
     ]);
+  });
+
+  it("redacts secret-bearing MCP commands from status rows", async () => {
+    const collector: Collector = {
+      async collect() {
+        return {
+          ok: true,
+          snapshot: {
+            machineId: "local",
+            hostname: "host",
+            platform: "linux",
+            uptime: 1,
+            ts: 1,
+            cpu: {
+              brand: "cpu",
+              cores: 1,
+              physicalCores: 1,
+              speedGHz: 1,
+              usagePercent: 1,
+              loadAvg: [0, 0, 0],
+            },
+            mem: {
+              totalMb: 1024,
+              usedMb: 512,
+              freeMb: 512,
+              usagePercent: 50,
+              swapTotalMb: 0,
+              swapUsedMb: 0,
+            },
+            disks: [],
+            gpus: [],
+            processes: [
+              {
+                pid: 99,
+                ppid: 1,
+                name: "node",
+                cmd: "node server.js --api-key mcp-status-secret",
+                cpuPercent: 0,
+                memMb: 7,
+                state: "S",
+                isZombie: false,
+                isOrphan: false,
+                elapsedSeconds: 55,
+              },
+            ],
+          },
+        };
+      },
+      async runCommand() {
+        return makeCommandResult({
+          stdout: "secretsrv: node server.js --api-key mcp-status-secret - Connected --token mcp-status-value-secret",
+        });
+      },
+    };
+
+    const status = await getMcpProcessStatus("local", collector);
+
+    expect(JSON.stringify(status)).not.toContain("mcp-status-secret");
+    expect(JSON.stringify(status)).not.toContain("mcp-status-value-secret");
+    expect(status.servers[0]?.command).toBe("node server.js --api-key ***");
+    expect(status.servers[0]?.rawStatus).toBe("Connected --token ***");
+    expect(status.servers[0]?.pids).toEqual([99]);
+    expect(status.servers[0]?.processCount).toBe(1);
   });
 });

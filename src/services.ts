@@ -1,5 +1,6 @@
 import { getCollectorForMachine, listKnownMachineIds, type Collector, type ProcessInfo } from "./collectors/index.js";
 import { scanListeningPorts, type ListeningPort } from "./ports.js";
+import { sanitizeCmd } from "./security.js";
 
 const LIST_SERVICES_COMMAND = `
 os="$(uname -s 2>/dev/null || echo unknown)"
@@ -212,7 +213,7 @@ export function detectDevServices(processes: ProcessInfo[], ports: ListeningPort
         name: `${name}:${process.pid}`,
         manager: "dev" as const,
         status: "running" as const,
-        detail: process.cmd,
+        detail: sanitizeCmd(process.cmd),
         pids: [process.pid],
         ports: ports
           .filter((port) => port.pid === process.pid)

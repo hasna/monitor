@@ -1,6 +1,7 @@
 import { getCollectorForMachine, listKnownMachineIds, type Collector } from "./collectors/index.js";
 import { parseClaudeMcpListOutput, type McpServerHealth } from "./runtime-health.js";
 import type { ProcessInfo } from "./collectors/local.js";
+import { sanitizeCmd } from "./security.js";
 
 const MCP_STATUS_COMMAND = "claude mcp list";
 const MCP_STATUS_TIMEOUT_MS = 20_000;
@@ -91,9 +92,9 @@ export function buildMcpProcessStatuses(
     const matched = processes.filter((process) => matchProcessToMcpServer(process, server));
     return {
       name: server.name,
-      command: server.command,
+      command: sanitizeCmd(server.command),
       status: server.status,
-      rawStatus: server.rawStatus,
+      rawStatus: sanitizeCmd(server.rawStatus),
       pids: matched.map((process) => process.pid).sort((left, right) => left - right),
       processCount: matched.length,
       memoryMb: matched.reduce((sum, process) => sum + process.memMb, 0),
@@ -115,7 +116,7 @@ export async function getMcpProcessStatus(
     collector.collect(),
   ]);
   const rawOutput = [mcpResult.stdout, mcpResult.stderr].filter(Boolean).join("\n").trim();
-  const servers = parseClaudeMcpListOutput(rawOutput);
+  const servers = parseClaudeMcpListOutput(rawOutput, { sanitizeCommands: false });
 
   if (!collected.ok) {
     return {
@@ -135,7 +136,7 @@ export async function getMcpProcessStatus(
     error:
       mcpResult.ok || servers.length > 0
         ? undefined
-        : ((mcpResult.error ?? mcpResult.stderr) || "Unable to inspect MCP status"),
+        : sanitizeCmd((mcpResult.error ?? mcpResult.stderr) || "Unable to inspect MCP status"),
   };
 }
 

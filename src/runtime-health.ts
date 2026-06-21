@@ -6,6 +6,7 @@ import type { Collector } from "./collectors/index.js";
 import { getCollectorForMachine, listKnownMachineIds } from "./collectors/index.js";
 import type { SystemSnapshot } from "./collectors/local.js";
 import { ProcessManager, processInfoToRow } from "./process-manager/index.js";
+import { sanitizeCmd } from "./security.js";
 
 const doctor = new Doctor();
 const processManager = new ProcessManager();
@@ -96,7 +97,11 @@ function buildCheck(name: string, status: DoctorStatus, message: string): Doctor
   };
 }
 
-export function parseClaudeMcpListOutput(output: string): McpServerHealth[] {
+export function parseClaudeMcpListOutput(
+  output: string,
+  options: { sanitizeCommands?: boolean } = {}
+): McpServerHealth[] {
+  const sanitizeCommands = options.sanitizeCommands ?? true;
   return output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -110,12 +115,13 @@ export function parseClaudeMcpListOutput(output: string): McpServerHealth[] {
       if (statusDelimiter === -1) return [];
 
       const header = line.slice(0, statusDelimiter).trim();
-      const rawStatus = line.slice(statusDelimiter + 3).trim();
+      const rawStatus = sanitizeCmd(line.slice(statusDelimiter + 3).trim());
       const nameDelimiter = header.indexOf(":");
       if (nameDelimiter === -1) return [];
 
       const name = header.slice(0, nameDelimiter).trim();
-      const command = header.slice(nameDelimiter + 1).trim();
+      const rawCommand = header.slice(nameDelimiter + 1).trim();
+      const command = sanitizeCommands ? sanitizeCmd(rawCommand) : rawCommand;
       const normalized = rawStatus.toLowerCase();
       const status =
         normalized.includes("failed") ||
@@ -147,9 +153,9 @@ export function parseTmuxPaneListOutput(output: string): TmuxPaneHealth[] {
         window: windowId,
         pane: paneId,
         paneDead: paneDead === "1",
-        currentCommand: currentCommand ?? "",
+        currentCommand: sanitizeCmd(currentCommand ?? ""),
         deadStatus: deadStatus ? Number.parseInt(deadStatus, 10) : null,
-        startCommand: startCommand ?? "",
+        startCommand: sanitizeCmd(startCommand ?? ""),
       };
     });
 }
@@ -158,7 +164,7 @@ async function inspectClaudeMcpHealth(collector: Collector): Promise<McpHealthRe
   const result = await collector.runCommand(CLAUDE_MCP_LIST_COMMAND, {
     timeoutMs: CLAUDE_MCP_LIST_TIMEOUT_MS,
   });
-  const rawOutput = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  const rawOutput = sanitizeCmd([result.stdout, result.stderr].filter(Boolean).join("\n").trim());
   const servers = parseClaudeMcpListOutput(rawOutput);
 
   return {
@@ -167,7 +173,7 @@ async function inspectClaudeMcpHealth(collector: Collector): Promise<McpHealthRe
     rawOutput,
     error: result.ok
       ? undefined
-      : ((result.error ?? result.stderr.trim()) || "Unable to inspect Claude MCP status"),
+      : sanitizeCmd((result.error ?? result.stderr.trim()) || "Unable to inspect Claude MCP status"),
     servers,
     connectedCount: servers.filter((server) => server.status === "connected").length,
     failedCount: servers.filter((server) => server.status === "failed").length,
@@ -179,7 +185,7 @@ async function inspectTmuxHealth(collector: Collector): Promise<TmuxHealthReport
   const result = await collector.runCommand(TMUX_LIST_PANES_COMMAND, {
     timeoutMs: TMUX_LIST_PANES_TIMEOUT_MS,
   });
-  const rawOutput = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  const rawOutput = sanitizeCmd([result.stdout, result.stderr].filter(Boolean).join("\n").trim());
   const normalizedError = [result.error, result.stderr].filter(Boolean).join(" ").toLowerCase();
   const noServer =
     normalizedError.includes("no server running") ||
@@ -207,7 +213,7 @@ async function inspectTmuxHealth(collector: Collector): Promise<TmuxHealthReport
     rawOutput,
     error: result.ok
       ? undefined
-      : ((result.error ?? result.stderr.trim()) || "Unable to inspect tmux panes"),
+      : sanitizeCmd((result.error ?? result.stderr.trim()) || "Unable to inspect tmux panes"),
     totalPanes: panes.length,
     deadPanes,
     deadCount: deadPanes.length,

@@ -92,4 +92,23 @@ describe("services helpers", () => {
       },
     ]);
   });
+
+  it("redacts secrets from detected dev service details", () => {
+    const services = detectDevServices([
+      {
+        pid: 456,
+        name: "bun",
+        cmd: "bunx vite --api-key service-secret",
+        cpuPercent: 1,
+        memMb: 64,
+        state: "S",
+        ppid: 1,
+        isZombie: false,
+        isOrphan: false,
+      },
+    ], []);
+
+    expect(JSON.stringify(services)).not.toContain("service-secret");
+    expect(services[0]?.detail).toBe("bunx vite --api-key ***");
+  });
 });

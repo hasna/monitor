@@ -29,6 +29,11 @@ import {
   collectMachineDiagnostics,
   mergeStoredAndLiveAlerts,
 } from "../runtime-health.js";
+import {
+  sanitizeProcessRow,
+  sanitizeSearchResults,
+  sanitizeSystemSnapshot,
+} from "../security.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
@@ -68,7 +73,7 @@ function startSseBroadcast(): void {
           broadcastSse({
             machine_id: machine.id,
             ts: Date.now(),
-            snapshot: diagnostics.snapshot,
+            snapshot: sanitizeSystemSnapshot(diagnostics.snapshot),
             doctor: diagnostics.doctorReport,
             runtime_health: diagnostics.runtimeHealth,
           });
@@ -104,27 +109,6 @@ function err(message: string, status = 400): Response {
 
 function validationErr(e: ValidationError): Response {
   return json({ error: e.message, fields: e.fields }, 400);
-}
-
-
-// ── Security helpers ──────────────────────────────────────────────────────────
-
-function sanitizeCmd(cmd: string | null): string | null {
-  if (!cmd) return cmd;
-  return cmd
-    .replace(/(--password[= ])\S+/gi, "$1***")
-    .replace(/(--passwd[= ])\S+/gi, "$1***")
-    .replace(/(AWS_SECRET_ACCESS_KEY=)\S+/g, "$1***")
-    .replace(/(AWS_SESSION_TOKEN=)\S+/g, "$1***")
-    .replace(/(AWS_SECRET_KEY=)\S+/g, "$1***")
-    .replace(/(\btoken[= ])\S+/gi, "$1***")
-    .replace(/(\bsecret[= ])\S+/gi, "$1***")
-    .replace(/(\bapi_key[= ])\S+/gi, "$1***")
-    .replace(/(\bpassword[= ])\S+/gi, "$1***");
-}
-
-function sanitizeProcessRow<T extends { cmd: string | null }>(row: T): T {
-  return { ...row, cmd: sanitizeCmd(row.cmd) };
 }
 
 // ── Route types ───────────────────────────────────────────────────────────────
@@ -240,7 +224,11 @@ route("GET", "/api/machines/:id/snapshot", async (_, params) => {
 
   const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => err(String(error), 500));
   if (diagnostics instanceof Response) return diagnostics;
-  return json({ snapshot: diagnostics.snapshot, doctor: diagnostics.doctorReport, runtime_health: diagnostics.runtimeHealth });
+  return json({
+    snapshot: sanitizeSystemSnapshot(diagnostics.snapshot),
+    doctor: diagnostics.doctorReport,
+    runtime_health: diagnostics.runtimeHealth,
+  });
 });
 
 // ── GET /api/machines/:id/metrics ─────────────────────────────────────────────
@@ -277,7 +265,7 @@ route("GET", "/api/machines/:id/processes", async (req, params) => {
     // Fall back to DB
     try {
       const rows = getProcesses(machineId);
-      return json({ machine_id: machineId, processes: rows.slice(0, limit) });
+      return json({ machine_id: machineId, processes: rows.slice(0, limit).map(sanitizeProcessRow) });
     } catch {
       return err(result.error, 500);
     }
@@ -483,7 +471,7 @@ route("GET", "/api/search", async (req) => {
     : undefined;
 
   try {
-    const results = search(input.q, tables);
+    const results = sanitizeSearchResults(search(input.q, tables));
     return json({ q: input.q, results });
   } catch (e) {
     return err(String(e), 500);

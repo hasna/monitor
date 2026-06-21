@@ -61,36 +61,16 @@ import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServe
 import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
 import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
 import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
+import {
+  sanitizeProcessRow,
+  sanitizeSearchResults,
+  sanitizeSystemSnapshot,
+} from "../security.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
 const pm = new ProcessManager();
 const cronEngine = new CronEngine();
-
-
-// ── Security helpers ──────────────────────────────────────────────────────────
-
-/**
- * Redact sensitive patterns from a process command line before returning
- * it to an AI agent or API consumer.
- */
-function sanitizeCmd(cmd: string | null): string | null {
-  if (!cmd) return cmd;
-  return cmd
-    .replace(/(--password[= ])\S+/gi, "$1***")
-    .replace(/(--passwd[= ])\S+/gi, "$1***")
-    .replace(/(AWS_SECRET_ACCESS_KEY=)\S+/g, "$1***")
-    .replace(/(AWS_SESSION_TOKEN=)\S+/g, "$1***")
-    .replace(/(AWS_SECRET_KEY=)\S+/g, "$1***")
-    .replace(/(\btoken[= ])\S+/gi, "$1***")
-    .replace(/(\bsecret[= ])\S+/gi, "$1***")
-    .replace(/(\bapi_key[= ])\S+/gi, "$1***")
-    .replace(/(\bpassword[= ])\S+/gi, "$1***");
-}
-
-function sanitizeProcessRow<T extends { cmd: string | null }>(row: T): T {
-  return { ...row, cmd: sanitizeCmd(row.cmd) };
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -795,7 +775,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "monitor_snapshot": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
         const { snapshot, doctorReport, runtimeHealth } = await collectAndAnalyse(machineId);
-        return jsonContent({ snapshot, doctorReport, runtimeHealth });
+        return jsonContent({ snapshot: sanitizeSystemSnapshot(snapshot), doctorReport, runtimeHealth });
       }
 
       // ── monitor_health ────────────────────────────────────────────────────
@@ -1353,7 +1333,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tables = tablesRaw && tablesRaw.length > 0 ? tablesRaw : undefined;
 
         try {
-          const results = search(query, tables);
+          const results = sanitizeSearchResults(search(query, tables));
           return jsonContent({ query, count: results.length, results });
         } catch (e) {
           return errorContent(String(e));
