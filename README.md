@@ -293,7 +293,9 @@ Default port is `3848`. Override in config: `"webPort": 9000`.
 
 ## Configuration
 
-Config is stored at `~/.hasna/monitor/config.json`.
+Config is stored at `~/.hasna/monitor/config.json`. Set `MONITOR_CONFIG_DIR`
+to use a different config/database directory for CI, tests, or isolated agent
+runs.
 
 ```json
 {

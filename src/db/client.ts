@@ -1,13 +1,11 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
-import { migrateConfig } from "../config.js";
+import { getDefaultDbPath, loadConfig, migrateConfig } from "../config.js";
 import type { DbAdapter } from "./adapter.js";
 import { SqliteAdapter } from "./sqlite-adapter.js";
 import { PostgresAdapter } from "./postgres-adapter.js";
 
-const DEFAULT_DB_PATH = join(homedir(), ".hasna", "monitor", "monitor.db");
 const MIGRATIONS_DIR = join(import.meta.dir, "migrations");
 
 export type Db = Database;
@@ -28,7 +26,7 @@ export function getDb(dbPath?: string): Database {
     migrateConfig();
   }
 
-  const path = dbPath ?? DEFAULT_DB_PATH;
+  const path = dbPath ?? loadConfig().dbPath ?? getDefaultDbPath();
   const dir = dirname(path);
 
   if (!existsSync(dir)) {

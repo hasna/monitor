@@ -80,8 +80,24 @@ export interface MonitorConfig {
   integrations?: IntegrationsConfig;
 }
 
-const CONFIG_DIR = join(homedir(), ".hasna", "monitor");
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+const CONFIG_DIR_ENV = "MONITOR_CONFIG_DIR";
+
+function getConfigDir(): string {
+  const override = process.env[CONFIG_DIR_ENV]?.trim();
+  return override ? override : join(homedir(), ".hasna", "monitor");
+}
+
+function hasConfigDirOverride(): boolean {
+  return Boolean(process.env[CONFIG_DIR_ENV]?.trim());
+}
+
+function getConfigPath(): string {
+  return join(getConfigDir(), "config.json");
+}
+
+export function getDefaultDbPath(): string {
+  return join(getConfigDir(), "monitor.db");
+}
 
 // ── Zod schema ────────────────────────────────────────────────────────────────
 
@@ -156,25 +172,39 @@ export const MonitorConfigSchema = z.object({
   integrations: IntegrationsConfigZSchema.optional(),
 });
 
-const DEFAULT_CONFIG: MonitorConfig = {
-  machines: [
-    {
-      id: "local",
-      label: "Local Machine",
-      type: "local",
-      pollIntervalSecs: 30,
+function defaultConfig(): MonitorConfig {
+  return {
+    machines: [
+      {
+        id: "local",
+        label: "Local Machine",
+        type: "local",
+        pollIntervalSecs: 30,
+      },
+    ],
+    thresholds: {
+      cpuPercent: 90,
+      memPercent: 90,
+      diskPercent: 85,
+      loadAvg: 10,
     },
-  ],
-  thresholds: {
-    cpuPercent: 90,
-    memPercent: 90,
-    diskPercent: 85,
-    loadAvg: 10,
-  },
-  dbPath: join(CONFIG_DIR, "monitor.db"),
-  apiPort: 3847,
-  webPort: 3848,
-};
+    dbPath: getDefaultDbPath(),
+    apiPort: 3847,
+    webPort: 3848,
+  };
+}
+
+function applyDefaults(config: MonitorConfig): MonitorConfig {
+  const defaults = defaultConfig();
+  return {
+    ...defaults,
+    ...config,
+    thresholds: {
+      ...defaults.thresholds,
+      ...(config.thresholds ?? {}),
+    },
+  };
+}
 
 // ── Legacy paths to check during migration ────────────────────────────────────
 
@@ -198,7 +228,10 @@ const LEGACY_PATHS = [
  */
 export function migrateConfig(): void {
   // If the canonical location already has a config, no migration needed
-  if (existsSync(CONFIG_PATH)) return;
+  const configDir = getConfigDir();
+  const configPath = getConfigPath();
+  if (existsSync(configPath)) return;
+  if (hasConfigDirOverride()) return;
 
   for (const legacyDir of LEGACY_PATHS) {
     if (!existsSync(legacyDir)) continue;
@@ -207,17 +240,17 @@ export function migrateConfig(): void {
     const legacyDb = join(legacyDir, "monitor.db");
 
     // Ensure the new directory exists
-    if (!existsSync(CONFIG_DIR)) {
-      mkdirSync(CONFIG_DIR, { recursive: true });
+    if (!existsSync(configDir)) {
+      mkdirSync(configDir, { recursive: true });
     }
 
     if (existsSync(legacyConfig)) {
-      copyFileSync(legacyConfig, CONFIG_PATH);
-      console.log(`[monitor] Migrated config from ${legacyConfig} → ${CONFIG_PATH}`);
+      copyFileSync(legacyConfig, configPath);
+      console.log(`[monitor] Migrated config from ${legacyConfig} → ${configPath}`);
     }
 
     if (existsSync(legacyDb)) {
-      const newDbPath = join(CONFIG_DIR, "monitor.db");
+      const newDbPath = join(configDir, "monitor.db");
       copyFileSync(legacyDb, newDbPath);
       console.log(`[monitor] Migrated database from ${legacyDb} → ${newDbPath}`);
     }
@@ -241,19 +274,22 @@ export function migrateConfig(): void {
  * Safe to call multiple times.
  */
 export function initConfig(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const configDir = getConfigDir();
+  const configPath = getConfigPath();
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
   }
-  if (!existsSync(CONFIG_PATH)) {
-    writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), "utf-8");
+  if (!existsSync(configPath)) {
+    writeFileSync(configPath, JSON.stringify(defaultConfig(), null, 2), "utf-8");
   }
 }
 
-let _migrationDone = false;
+const migratedConfigDirs = new Set<string>();
 
 function ensureMigrated(): void {
-  if (_migrationDone) return;
-  _migrationDone = true;
+  const configDir = getConfigDir();
+  if (migratedConfigDirs.has(configDir)) return;
+  migratedConfigDirs.add(configDir);
   migrateConfig();
 }
 
@@ -262,7 +298,8 @@ export function loadConfig(): MonitorConfig {
   initConfig();
 
   try {
-    const raw = readFileSync(CONFIG_PATH, "utf-8");
+    const configPath = getConfigPath();
+    const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
 
     const result = MonitorConfigSchema.safeParse(parsed);
@@ -270,21 +307,22 @@ export function loadConfig(): MonitorConfig {
       const issues = result.error.issues
         .map((i) => `${i.path.join(".")}: ${i.message}`)
         .join("; ");
-      throw new Error(`Invalid monitor config at ${CONFIG_PATH}: ${issues}`);
+      throw new Error(`Invalid monitor config at ${configPath}: ${issues}`);
     }
 
-    return { ...DEFAULT_CONFIG, ...result.data };
+    return applyDefaults(result.data);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return DEFAULT_CONFIG;
+      return defaultConfig();
     }
     throw err;
   }
 }
 
 export function saveConfig(config: MonitorConfig): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const configDir = getConfigDir();
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
   }
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2), "utf-8");
 }

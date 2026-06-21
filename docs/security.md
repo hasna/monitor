@@ -95,6 +95,8 @@ All user-supplied inputs are validated with Zod schemas (`src/validation.ts`) be
 
 - Config is stored in `~/.hasna/monitor/config.json` — a user-owned location.
 - The SQLite database is stored in `~/.hasna/monitor/monitor.db`.
+- `MONITOR_CONFIG_DIR` may be set to isolate config and SQLite storage in CI,
+  tests, or agent sandboxes.
 - No credentials are stored in the config file (only key paths, not key contents).
 
 ---
