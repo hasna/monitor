@@ -123,6 +123,22 @@ const MachineConfigZSchema = z.object({
   ec2: Ec2MachineConfigZSchema.optional(),
   pollIntervalSecs: z.number().int().min(1).optional(),
   tags: z.array(z.string()).optional(),
+}).superRefine((machine, ctx) => {
+  if (machine.type === "ssh" && !machine.ssh) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ssh"],
+      message: "ssh machines require ssh connection settings",
+    });
+  }
+
+  if (machine.type === "ec2" && !machine.ec2) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["ec2"],
+      message: "ec2 machines require ec2 connection settings",
+    });
+  }
 });
 
 const AlertThresholdsZSchema = z.object({

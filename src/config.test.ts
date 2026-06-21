@@ -179,6 +179,28 @@ describe("loadConfig()", () => {
     }
   });
 
+  it("rejects remote machines without required connection settings", () => {
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({
+        machines: [{ id: "remote-ssh", label: "Remote SSH", type: "ssh" }],
+      }),
+      "utf-8"
+    );
+
+    expect(() => loadConfig()).toThrow(/ssh/i);
+
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({
+        machines: [{ id: "remote-ec2", label: "Remote EC2", type: "ec2" }],
+      }),
+      "utf-8"
+    );
+
+    expect(() => loadConfig()).toThrow(/ec2/i);
+  });
+
   it("returns an object", () => {
     const config = loadConfig();
     expect(typeof config).toBe("object");
