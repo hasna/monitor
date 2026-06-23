@@ -1,6 +1,7 @@
 import { getCollectorForMachine } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig } from "../config.js";
+import { timingSafeEqual } from "crypto";
 import {
   listMachines,
   getMachine,
@@ -87,18 +88,25 @@ function startSseBroadcast(): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-};
+export const DEFAULT_API_HOSTNAME = "127.0.0.1";
+const API_HOST_ENV_NAMES = ["HASNA_MONITOR_API_HOST", "MONITOR_API_HOST"] as const;
+const API_TOKEN_ENV_NAMES = ["HASNA_MONITOR_API_TOKEN", "MONITOR_API_TOKEN"] as const;
+const API_CORS_ORIGINS_ENV_NAMES = [
+  "HASNA_MONITOR_API_CORS_ORIGINS",
+  "MONITOR_API_CORS_ORIGINS",
+] as const;
+const DEFAULT_CORS_ORIGINS = [
+  "http://localhost:3848",
+  "http://127.0.0.1:3848",
+  "http://[::1]:3848",
+];
 
-function json(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "Content-Type": "application/json",
-      ...CORS_HEADERS,
+      ...headers,
     },
   });
 }
@@ -111,6 +119,99 @@ function validationErr(e: ValidationError): Response {
   return json({ error: e.message, fields: e.fields }, 400);
 }
 
+// ── Security helpers ──────────────────────────────────────────────────────────
+
+function firstEnv(names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function configuredCorsOrigins(): Set<string> {
+  const origins = new Set(DEFAULT_CORS_ORIGINS);
+  const configured = firstEnv(API_CORS_ORIGINS_ENV_NAMES);
+  if (!configured) return origins;
+
+  for (const origin of configured.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+    if (origin !== "*") origins.add(origin);
+  }
+  return origins;
+}
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  return configuredCorsOrigins().has(origin);
+}
+
+function corsHeadersForRequest(req: Request): Headers | null {
+  const origin = req.headers.get("Origin");
+  if (!origin || !isAllowedCorsOrigin(origin)) return null;
+
+  const headers = new Headers();
+  headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, X-Monitor-Token");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  headers.set("Vary", "Origin");
+  return headers;
+}
+
+function withCors(req: Request, response: Response): Response {
+  const corsHeaders = corsHeadersForRequest(req);
+  if (!corsHeaders) return response;
+
+  const headers = new Headers(response.headers);
+  for (const [key, value] of corsHeaders) headers.set(key, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function handlePreflight(req: Request): Response {
+  const origin = req.headers.get("Origin");
+  if (origin && !isAllowedCorsOrigin(origin)) {
+    return new Response(null, { status: 403 });
+  }
+
+  const headers = origin
+    ? corsHeadersForRequest(req) ?? new Headers()
+    : new Headers({ Allow: "GET, POST, PUT, DELETE, OPTIONS" });
+  return new Response(null, { status: 204, headers });
+}
+
+function apiAuthToken(): string | null {
+  return firstEnv(API_TOKEN_ENV_NAMES) ?? null;
+}
+
+function requestAuthToken(req: Request): string | null {
+  const auth = req.headers.get("Authorization")?.trim();
+  if (auth?.toLowerCase().startsWith("bearer ")) {
+    return auth.slice("bearer ".length).trim() || null;
+  }
+  return req.headers.get("X-API-Key")?.trim() || req.headers.get("X-Monitor-Token")?.trim() || null;
+}
+
+function secureTokenEquals(actual: string, expected: string): boolean {
+  const encoder = new TextEncoder();
+  const actualBytes = encoder.encode(actual);
+  const expectedBytes = encoder.encode(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function isAuthorized(req: Request): boolean {
+  const expected = apiAuthToken();
+  const actual = requestAuthToken(req);
+  return Boolean(expected && actual && secureTokenEquals(actual, expected));
+}
+
+function unauthorized(): Response {
+  return json({ error: "Unauthorized" }, 401, {
+    "WWW-Authenticate": 'Bearer realm="open-monitor"',
+  });
+}
+
 // ── Route types ───────────────────────────────────────────────────────────────
 
 type Handler = (req: Request, params: Record<string, string>) => Promise<Response>;
@@ -120,17 +221,29 @@ interface Route {
   pattern: RegExp;
   paramNames: string[];
   handler: Handler;
+  requiresAuth: boolean;
 }
 
 const routes: Route[] = [];
 
-function route(method: string, path: string, handler: Handler): void {
+function route(
+  method: string,
+  path: string,
+  handler: Handler,
+  opts: { requiresAuth?: boolean } = {}
+): void {
   const paramNames: string[] = [];
   const pattern = path.replace(/:(\w+)/g, (_, name: string) => {
     paramNames.push(name);
     return "([^/]+)";
   });
-  routes.push({ method, pattern: new RegExp(`^${pattern}$`), paramNames, handler });
+  routes.push({
+    method,
+    pattern: new RegExp(`^${pattern}$`),
+    paramNames,
+    handler,
+    requiresAuth: opts.requiresAuth ?? false,
+  });
 }
 
 // ── GET /health ───────────────────────────────────────────────────────────────
@@ -187,7 +300,7 @@ route("POST", "/api/machines", async (req) => {
   });
 
   return json({ ok: true, id, name, type }, 201);
-});
+}, { requiresAuth: true });
 
 // ── GET /api/machines/:id ─────────────────────────────────────────────────────
 
@@ -212,7 +325,7 @@ route("DELETE", "/api/machines/:id", async (_, params) => {
   } catch (e) {
     return err(String(e), 500);
   }
-});
+}, { requiresAuth: true });
 
 // ── GET /api/machines/:id/snapshot ────────────────────────────────────────────
 
@@ -333,7 +446,7 @@ route("POST", "/api/machines/:id/doctor", async (_, params) => {
   const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => err(String(error), 500));
   if (diagnostics instanceof Response) return diagnostics;
   return json({ ...diagnostics.doctorReport, runtimeHealth: diagnostics.runtimeHealth });
-});
+}, { requiresAuth: true });
 
 // ── POST /api/machines/:id/kill ───────────────────────────────────────────────
 
@@ -356,7 +469,7 @@ route("POST", "/api/machines/:id/kill", async (req, params) => {
 
   const action = await pm.kill(input.pid, input.signal as KillSignal, machineId);
   return json(action);
-});
+}, { requiresAuth: true });
 
 // ── GET /api/alerts ───────────────────────────────────────────────────────────
 
@@ -420,7 +533,7 @@ route("POST", "/api/cron", async (req) => {
   } catch (e) {
     return err(String(e), 500);
   }
-});
+}, { requiresAuth: true });
 
 // ── GET /api/cron/:id ─────────────────────────────────────────────────────────
 
@@ -449,7 +562,7 @@ route("POST", "/api/cron/:id/run", async (_, params) => {
   } catch (e) {
     return err(String(e), 500);
   }
-});
+}, { requiresAuth: true });
 
 // ── GET /api/search ───────────────────────────────────────────────────────────
 
@@ -502,7 +615,6 @@ route("GET", "/api/stream", async () => {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      ...CORS_HEADERS,
     },
   });
 });
@@ -515,9 +627,7 @@ function handleRequest(req: Request): Promise<Response> {
 
   // CORS preflight
   if (req.method === "OPTIONS") {
-    return Promise.resolve(
-      new Response(null, { status: 204, headers: CORS_HEADERS })
-    );
+    return Promise.resolve(handlePreflight(req));
   }
 
   for (const r of routes) {
@@ -530,10 +640,15 @@ function handleRequest(req: Request): Promise<Response> {
       params[name] = match[i + 1] ?? "";
     });
 
-    return r.handler(req, params).catch((e) => err(String(e), 500));
+    return (async () => {
+      if (r.requiresAuth && !isAuthorized(req)) return unauthorized();
+      return r.handler(req, params);
+    })()
+      .catch((e) => err(String(e), 500))
+      .then((response) => withCors(req, response));
   }
 
-  return Promise.resolve(json({ error: "Not found" }, 404));
+  return Promise.resolve(withCors(req, json({ error: "Not found" }, 404)));
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
@@ -543,11 +658,23 @@ export interface ApiServerOptions {
   hostname?: string;
 }
 
-export function startApiServer(opts: ApiServerOptions = {}): void {
-  const port = opts.port ?? loadConfig().apiPort ?? 3847;
-  const hostname = opts.hostname ?? "0.0.0.0";
+export interface ResolvedApiServerOptions {
+  port: number;
+  hostname: string;
+}
 
-  Bun.serve({
+export function resolveApiServerOptions(opts: ApiServerOptions = {}): ResolvedApiServerOptions {
+  const config = loadConfig();
+  return {
+    port: opts.port ?? config.apiPort ?? 3847,
+    hostname: opts.hostname ?? firstEnv(API_HOST_ENV_NAMES) ?? DEFAULT_API_HOSTNAME,
+  };
+}
+
+export function startApiServer(opts: ApiServerOptions = {}): ReturnType<typeof Bun.serve> {
+  const { port, hostname } = resolveApiServerOptions(opts);
+
+  const server = Bun.serve({
     port,
     hostname,
     fetch: handleRequest,
@@ -555,4 +682,8 @@ export function startApiServer(opts: ApiServerOptions = {}): void {
 
   console.log(`[monitor-server] REST API listening on http://${hostname}:${port}`);
   console.log(`[monitor-server] SSE stream available at http://${hostname}:${port}/api/stream`);
+  if (!apiAuthToken()) {
+    console.warn("[monitor-server] Mutating REST routes require HASNA_MONITOR_API_TOKEN or MONITOR_API_TOKEN and are currently disabled.");
+  }
+  return server;
 }

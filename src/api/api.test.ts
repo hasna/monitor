@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { existsSync, unlinkSync } from "fs";
 import { Database } from "bun:sqlite";
+import { spawn } from "child_process";
 
 // ── DB Setup ──────────────────────────────────────────────────────────────────
 
@@ -134,18 +135,39 @@ closeDb();
 getDb(DB_PATH);
 
 // Now it's safe to import the server
-import { startApiServer } from "./server";
+import { resolveApiServerOptions, startApiServer } from "./server";
 
 // ── Server Setup ──────────────────────────────────────────────────────────────
 
 const PORT = 19100 + Math.floor(Math.random() * 500);
 const BASE = `http://127.0.0.1:${PORT}`;
+const AUTH_TOKEN = "monitor-api-test-token";
+const ENV_KEYS = [
+  "HASNA_MONITOR_API_TOKEN",
+  "MONITOR_API_TOKEN",
+  "HASNA_MONITOR_API_HOST",
+  "MONITOR_API_HOST",
+  "HASNA_MONITOR_API_CORS_ORIGINS",
+  "MONITOR_API_CORS_ORIGINS",
+] as const;
+const ORIGINAL_ENV = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 beforeAll(() => {
+  process.env["HASNA_MONITOR_API_TOKEN"] = AUTH_TOKEN;
+  delete process.env["MONITOR_API_TOKEN"];
+  delete process.env["HASNA_MONITOR_API_HOST"];
+  delete process.env["MONITOR_API_HOST"];
+  delete process.env["HASNA_MONITOR_API_CORS_ORIGINS"];
+  delete process.env["MONITOR_API_CORS_ORIGINS"];
   startApiServer({ port: PORT, hostname: "127.0.0.1" });
 });
 
 afterAll(() => {
+  for (const key of ENV_KEYS) {
+    const value = ORIGINAL_ENV.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   closeDb();
   for (const suffix of ["", "-wal", "-shm"]) {
     const p = DB_PATH + suffix;
@@ -162,10 +184,43 @@ async function get(path: string): Promise<Response> {
 async function post(path: string, body: unknown): Promise<Response> {
   return fetch(`${BASE}${path}`, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function postUnauth(path: string, body: unknown): Promise<Response> {
+  return fetch(`${BASE}${path}`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
+
+async function deleteUnauth(path: string): Promise<Response> {
+  return fetch(`${BASE}${path}`, { method: "DELETE" });
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Server security defaults ──────────────────────────────────────────────────
+
+describe("server security defaults", () => {
+  it("defaults the API host to loopback", () => {
+    const resolved = resolveApiServerOptions({ port: PORT });
+    expect(resolved.hostname).toBe("127.0.0.1");
+  });
+});
 
 // ── GET /health ───────────────────────────────────────────────────────────────
 
@@ -327,12 +382,131 @@ describe("GET /api/cron", () => {
   });
 });
 
+// ── Protected mutating routes ─────────────────────────────────────────────────
+
+describe("mutating route auth", () => {
+  it("rejects unauthenticated machine create and delete", async () => {
+    const createUnauth = await postUnauth("/api/machines", {
+      id: "unauth-machine-create",
+      name: "Unauth Machine Create",
+      type: "local",
+    });
+    expect(createUnauth.status).toBe(401);
+
+    const id = `delete-auth-${Date.now()}`;
+    const createAuth = await post("/api/machines", {
+      id,
+      name: "Delete Auth Guard",
+      type: "local",
+    });
+    expect(createAuth.status).toBe(201);
+
+    const deleteRes = await deleteUnauth(`/api/machines/${id}`);
+    expect(deleteRes.status).toBe(401);
+
+    const lookup = await get(`/api/machines/${id}`);
+    expect(lookup.status).toBe(200);
+  });
+
+  it("rejects unauthenticated shell cron creation", async () => {
+    const res = await postUnauth("/api/cron", {
+      name: "unauth-shell-create",
+      schedule: "* * * * *",
+      command: "echo should-not-create",
+      action_type: "shell",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("does not execute an unauthenticated shell cron run", async () => {
+    const marker = `/tmp/monitor-api-auth-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+    if (existsSync(marker)) unlinkSync(marker);
+
+    const createRes = await post("/api/cron", {
+      name: `auth-shell-run-${Date.now()}`,
+      schedule: "* * * * *",
+      command: `printf executed > ${marker}`,
+      action_type: "shell",
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { id: number };
+
+    const unauthRun = await postUnauth(`/api/cron/${created.id}/run`, {});
+    expect(unauthRun.status).toBe(401);
+    expect(existsSync(marker)).toBe(false);
+
+    const authRun = await post(`/api/cron/${created.id}/run`, {});
+    expect(authRun.status).toBe(200);
+    expect(existsSync(marker)).toBe(true);
+    unlinkSync(marker);
+  });
+
+  it("does not kill a process without auth", async () => {
+    const child = spawn("sleep", ["60"], { stdio: "ignore" });
+    const pid = child.pid;
+    expect(typeof pid).toBe("number");
+    if (!pid) throw new Error("sleep child process did not expose a pid");
+
+    try {
+      const res = await postUnauth("/api/machines/local/kill", { pid, signal: "SIGTERM" });
+      expect(res.status).toBe(401);
+      expect(isPidAlive(pid)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("rejects unauthenticated doctor diagnostics", async () => {
+    const res = await postUnauth("/api/machines/local/doctor", {});
+    expect(res.status).toBe(401);
+  });
+});
+
 // ── OPTIONS (CORS preflight) ──────────────────────────────────────────────────
 
 describe("OPTIONS preflight", () => {
   it("returns 204 for CORS preflight", async () => {
     const res = await fetch(`${BASE}/health`, { method: "OPTIONS" });
     expect(res.status).toBe(204);
+  });
+
+  it("returns an exact allowed origin instead of wildcard CORS", async () => {
+    const origin = "http://localhost:3848";
+    const res = await fetch(`${BASE}/health`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "GET",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+  });
+
+  it("rejects untrusted CORS origins", async () => {
+    const res = await fetch(`${BASE}/health`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("rejects Host-spoofed CORS origins", async () => {
+    const origin = `http://evil.example:${PORT}`;
+    const res = await fetch(`${BASE}/health`, {
+      method: "OPTIONS",
+      headers: {
+        Host: `evil.example:${PORT}`,
+        Origin: origin,
+        "Access-Control-Request-Method": "POST",
+      },
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 });
 
