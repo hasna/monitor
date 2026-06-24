@@ -117,6 +117,10 @@ Endpoints: `GET /health`, `POST /mcp` (Streamable HTTP).
 
 ### Available MCP Tools
 
+MCP tools return compact JSON summaries by default to keep agent context small.
+List-like tools accept `limit`, `cursor`, and `verbose`; pass `verbose: true`
+to get the legacy full payload, including full rows and nested details.
+
 | Tool | Description |
 |------|-------------|
 | `monitor_snapshot` | Get current metrics snapshot (CPU, memory, disk, GPU) |
@@ -151,6 +155,13 @@ Endpoints: `GET /health`, `POST /mcp` (Streamable HTTP).
 ```
 monitor <command> [options]
 ```
+
+Human CLI output is compact by default for list/search/status-style commands:
+long text is truncated, row counts are capped, and paged output prints a hint
+with the next `--cursor` value. Use `--limit`, `--cursor`, and `--verbose` for
+gradual disclosure, or `--json` for machine-readable output. Existing JSON
+paths remain raw/stable unless a command already supported limit-based JSON
+output, such as `monitor ps`.
 
 | Command | Description |
 |---------|-------------|
@@ -217,10 +228,12 @@ monitor add prod-api \
 ### monitor ps
 
 ```bash
-monitor ps                     # all processes
+monitor ps                     # compact top processes by CPU
 monitor ps --filter zombies    # zombie processes only
 monitor ps --filter orphans    # orphan processes
 monitor ps --limit 20          # top 20 by CPU
+monitor ps --cursor 20         # next compact page
+monitor ps --verbose           # include command snippets
 monitor ps --json              # raw JSON output
 ```
 
@@ -240,6 +253,9 @@ monitor apps macos-node-b          # one remote machine
 monitor apps --all            # inventories for all configured machines
 monitor apps --compare        # highlight missing/version-skewed/root-owned installs
 monitor compare-apps          # dedicated cross-machine consistency report
+monitor apps --limit 50       # show more rows
+monitor apps --cursor 50      # continue from a previous page
+monitor apps --verbose        # wider app/version detail
 monitor apps --json
 ```
 
@@ -251,6 +267,7 @@ monitor service list --machine macos-node-b    # inspect one remote machine
 monitor service start postgresql          # systemd / brew / launchctl start
 monitor service restart nginx             # systemd / brew / launchctl restart
 monitor service stop vite:12345           # stop a detected dev server by PID-backed name
+monitor service list --limit 50 --verbose
 monitor service list --json
 ```
 
@@ -271,6 +288,7 @@ monitor containers linux-node-a         # remote machine containers
 monitor containers --all           # all configured machines
 monitor containers --logs api      # recent logs for one container
 monitor containers --logs api --tail 200
+monitor containers --limit 50 --verbose
 monitor containers --json
 ```
 
@@ -281,6 +299,8 @@ monitor ports                # local listeners
 monitor ports linux-node-a        # one remote machine
 monitor ports --all          # scan all configured machines
 monitor ports --protocol tcp # filter by protocol
+monitor ports --limit 50 --cursor 50
+monitor ports --verbose      # wider host/process columns
 monitor ports --json         # raw JSON output
 ```
 
@@ -309,7 +329,18 @@ monitor loop-check workspace-ports \
 monitor tailscale          # local Tailscale graph
 monitor tailscale linux-node-a  # one remote machine
 monitor tailscale --all    # inspect all configured machines
+monitor tailscale --limit 50 --verbose
 monitor tailscale --json   # raw JSON output
+```
+
+### monitor search
+
+```bash
+monitor search "high cpu"              # compact result snippets
+monitor search "postgres" --limit 25   # show more matches
+monitor search "postgres" --cursor 25  # next page
+monitor search "postgres" --verbose    # include ranks and wider snippets
+monitor search "postgres" --json       # raw search rows
 ```
 
 ### monitor report

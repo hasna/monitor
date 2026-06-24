@@ -75,6 +75,18 @@ describe("mcp streamable http server", () => {
     });
     expect(result.content).toBeDefined();
     expect(Array.isArray(result.content)).toBe(true);
+    const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? "";
+    const parsed = JSON.parse(text) as { machines: unknown[]; page: { total: number }; hint: string };
+    expect(Array.isArray(parsed.machines)).toBe(true);
+    expect(parsed.page.total).toBeGreaterThanOrEqual(parsed.machines.length);
+    expect(parsed.hint).toContain("verbose=true");
+
+    const verbose = await client.callTool({
+      name: "monitor_machines",
+      arguments: { verbose: true },
+    });
+    const verboseText = (verbose.content as Array<{ type: string; text?: string }>)[0]?.text ?? "";
+    expect(Array.isArray(JSON.parse(verboseText))).toBe(true);
 
     await client.close();
   });

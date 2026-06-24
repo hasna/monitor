@@ -27,6 +27,7 @@ _monitor() {
     'mcp-restart:Restart a matched MCP process and re-check health'
     'report:Build or schedule fleet health reports'
     'cron:Manage cron jobs'
+    'search:Full-text search across machines, alerts, and processes'
     'migrate:Migrate config from legacy locations'
     'serve:Start the REST API and web server'
     'mcp:Start the MCP server (stdio transport)'
@@ -53,6 +54,9 @@ _monitor() {
           ;;
         machines)
           _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of machines to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Include host/detail columns]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]'
           ;;
         add)
@@ -67,12 +71,17 @@ _monitor() {
           ;;
         doctor)
           _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of detail rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full diagnostic messages]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
         ps)
           _arguments \
             '(-n --limit)'{-n,--limit}'[Number of processes to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Include command snippets]' \
             '(-s --sort)'{-s,--sort}'[Sort by]:sort:(cpu mem)' \
             '(-f --filter)'{-f,--filter}'[Filter]:filter:(all zombies orphans high_mem)' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
@@ -88,6 +97,9 @@ _monitor() {
         alerts)
           _arguments \
             '(-a --all)'{-a,--all}'[Show all alerts including resolved ones]' \
+            '(-n --limit)'{-n,--limit}'[Number of alerts to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full alert messages]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
@@ -95,16 +107,25 @@ _monitor() {
           _arguments \
             '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
             '(-c --compare)'{-c,--compare}'[Compare installed apps across machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of app rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider app columns]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
         compare-apps)
           _arguments \
+            '(-n --limit)'{-n,--limit}'[Number of comparison rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider comparison detail]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]'
           ;;
         service)
           _arguments \
             '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-n --limit)'{-n,--limit}'[Number of services to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show service detail strings]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1:action:(list start stop restart)' \
             '2::service-name:'
@@ -112,6 +133,9 @@ _monitor() {
         temperature)
           _arguments \
             '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of readings to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider reading labels]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
@@ -120,6 +144,9 @@ _monitor() {
             '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
             '(-l --logs)'{-l,--logs}'[Fetch logs for a specific container]:container:' \
             '(-t --tail)'{-t,--tail}'[Number of log lines to fetch]:lines:' \
+            '(-n --limit)'{-n,--limit}'[Number of containers or log lines to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider container columns]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
@@ -127,18 +154,27 @@ _monitor() {
           _arguments \
             '(-a --all)'{-a,--all}'[Scan all configured machines]' \
             '(-p --protocol)'{-p,--protocol}'[Filter by protocol]:protocol:(tcp udp)' \
+            '(-n --limit)'{-n,--limit}'[Number of ports to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show wider host/process columns]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
         tailscale)
           _arguments \
             '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of peers to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show peer IPs/details]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
         mcp-health|mcp-status)
           _arguments \
             '(-a --all)'{-a,--all}'[Inspect all configured machines]' \
+            '(-n --limit)'{-n,--limit}'[Number of detail rows to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show full MCP detail]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;
@@ -174,6 +210,9 @@ _monitor() {
                 list)
                   _arguments \
                     '(-m --machine)'{-m,--machine}'[Filter by machine ID]:machine-id:_monitor_machine_ids' \
+                    '(-n --limit)'{-n,--limit}'[Number of cron jobs to show]:n:' \
+                    '--cursor[Zero-based row offset]:cursor:' \
+                    '(-v --verbose)'{-v,--verbose}'[Show command snippets]' \
                     '(-j --json)'{-j,--json}'[Output raw JSON]'
                   ;;
                 add)
@@ -189,6 +228,15 @@ _monitor() {
               esac
               ;;
           esac
+          ;;
+        search)
+          _arguments \
+            '(-t --tables)'{-t,--tables}'[Tables to search]:tables:' \
+            '(-n --limit)'{-n,--limit}'[Number of results to show]:n:' \
+            '--cursor[Zero-based row offset]:cursor:' \
+            '(-v --verbose)'{-v,--verbose}'[Show ranks and wider snippets]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1:query:'
           ;;
         completions)
           local -a completion_subcommands

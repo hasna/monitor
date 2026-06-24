@@ -66,6 +66,14 @@ import {
   sanitizeSearchResults,
   sanitizeSystemSnapshot,
 } from "../security.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  compactMcpHint,
+  pageItems,
+  pageSummary,
+  truncateText,
+} from "../output.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
@@ -90,6 +98,279 @@ function errorContent(message: string) {
   return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
 }
 
+const compactToolProperties = {
+  limit: {
+    type: "number",
+    description: `Maximum rows to return in compact output. Default: ${DEFAULT_LIST_LIMIT}.`,
+  },
+  cursor: {
+    type: ["string", "number"],
+    description: "Zero-based row offset from a previous compact response's next_cursor.",
+  },
+  verbose: {
+    type: "boolean",
+    description: "Return the full legacy payload instead of compact output. Default: false.",
+  },
+} as const;
+
+function getLimitArgs(
+  args: Record<string, unknown>,
+  defaultLimit = DEFAULT_LIST_LIMIT
+): { limit: unknown; cursor: unknown; defaultLimit: number } {
+  return {
+    limit: args["limit"],
+    cursor: args["cursor"],
+    defaultLimit,
+  };
+}
+
+function compactRuntimeHealth(runtimeHealth: Awaited<ReturnType<typeof collectMachineDiagnostics>>["runtimeHealth"], args: Record<string, unknown>) {
+  const serversPage = pageItems(runtimeHealth.mcp.servers, getLimitArgs(args));
+  const panesPage = pageItems(runtimeHealth.tmux.deadPanes, getLimitArgs(args));
+
+  return {
+    mcp: {
+      total: runtimeHealth.mcp.servers.length,
+      connected: runtimeHealth.mcp.connectedCount,
+      failed: runtimeHealth.mcp.failedCount,
+      servers: serversPage.items.map((server) => ({
+        name: server.name,
+        status: server.status,
+        raw_status: truncateText(server.rawStatus, 120),
+      })),
+      page: pageSummary(serversPage),
+    },
+    tmux: {
+      dead_count: runtimeHealth.tmux.deadCount,
+      dead_panes: panesPage.items.map((pane) => ({
+        ref: pane.ref,
+        exit_status: pane.deadStatus,
+        command: truncateText(pane.startCommand || pane.currentCommand || "", 120),
+      })),
+      page: pageSummary(panesPage),
+    },
+  };
+}
+
+function compactDoctorReport(
+  machineId: string,
+  diagnostics: Awaited<ReturnType<typeof collectMachineDiagnostics>>,
+  args: Record<string, unknown>
+) {
+  const actionsPage = pageItems(diagnostics.doctorReport.recommendedActions, {
+    ...getLimitArgs(args, Math.min(DEFAULT_LIST_LIMIT, 10)),
+  });
+  const nonOkChecks = diagnostics.doctorReport.checks.filter((check) => check.status !== "ok");
+
+  return {
+    machine_id: machineId,
+    overall_status: diagnostics.doctorReport.overallStatus,
+    summary: {
+      cpu_percent: diagnostics.snapshot.cpu.usagePercent,
+      mem_percent: diagnostics.snapshot.mem.usagePercent,
+      mem_used_mb: diagnostics.snapshot.mem.usedMb,
+      mem_total_mb: diagnostics.snapshot.mem.totalMb,
+      disk_count: diagnostics.snapshot.disks.length,
+      max_disk_percent: diagnostics.snapshot.disks.length > 0
+        ? Math.max(...diagnostics.snapshot.disks.map((disk) => disk.usagePercent))
+        : null,
+      gpu_count: diagnostics.snapshot.gpus.length,
+      process_count: diagnostics.snapshot.processes.length,
+      zombie_count: diagnostics.processReport.zombies.length,
+      orphan_count: diagnostics.processReport.orphans.length,
+    },
+    checks: nonOkChecks.map((check) => ({
+      name: check.name,
+      status: check.status,
+      severity: check.severity,
+      value: check.value,
+      threshold: check.threshold,
+      message: truncateText(check.message, 140),
+    })),
+    runtime_health: compactRuntimeHealth(diagnostics.runtimeHealth, args),
+    recommended_actions: actionsPage.items.map((action) => truncateText(action, 180)),
+    page: pageSummary(actionsPage),
+    hint: "Pass verbose=true for the full DoctorReport/runtime health payload. Use monitor_processes for process details.",
+  };
+}
+
+type InstalledAppsResult = Awaited<ReturnType<typeof listInstalledApps>>;
+type ServiceListResult = Awaited<ReturnType<typeof listManagedServices>>;
+type PortsResult = Awaited<ReturnType<typeof scanListeningPorts>>;
+type TailscaleResult = Awaited<ReturnType<typeof getTailscaleStatus>>;
+type TemperatureResult = Awaited<ReturnType<typeof getTemperatureStatus>>;
+type ContainersResult = Awaited<ReturnType<typeof listContainers>>;
+type McpStatusResult = Awaited<ReturnType<typeof getMcpProcessStatus>>;
+type MachineListItem = {
+  id: string;
+  name: string;
+  type: string;
+  host: string | null;
+  port: number | null;
+  ssh_key_path: string | null;
+  aws_region: string | null;
+  aws_instance_id: string | null;
+  tags: string;
+  created_at: number;
+  last_seen: number | null;
+  status: string;
+};
+
+function compactInstalledAppsResult(result: InstalledAppsResult, args: Record<string, unknown>) {
+  const page = pageItems(result.apps, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    error: result.error,
+    total: result.apps.length,
+    apps: page.items.map((app) => ({
+      name: truncateText(app.name, 80),
+      manager: app.manager,
+      kind: app.kind,
+      version: truncateText(app.version ?? "-", 48),
+      root_owned: app.rootOwned,
+    })),
+    page: pageSummary(page),
+    hint: compactMcpHint(page, "Pass verbose=true for owners and full inventory rows."),
+  };
+}
+
+function compactServiceResult(result: ServiceListResult, args: Record<string, unknown>) {
+  const page = pageItems(result.services, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    error: result.error,
+    total: result.services.length,
+    services: page.items.map((service) => ({
+      name: truncateText(service.name, 80),
+      manager: service.manager,
+      status: service.status,
+      pids: service.pids,
+      ports: service.ports,
+    })),
+    page: pageSummary(page),
+    hint: compactMcpHint(page, "Pass verbose=true for service detail strings and full rows."),
+  };
+}
+
+function compactPortsResult(result: PortsResult, args: Record<string, unknown>) {
+  const page = pageItems(result.ports, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    error: result.error,
+    total: result.ports.length,
+    ports: page.items.map((port) => ({
+      port: port.port,
+      protocol: port.protocol,
+      host: truncateText(port.host, 80),
+      pid: port.pid,
+      process: truncateText(port.process ?? "-", 80),
+    })),
+    page: pageSummary(page),
+    hint: compactMcpHint(page, "Pass verbose=true for full listener rows."),
+  };
+}
+
+function compactTailscaleResult(result: TailscaleResult, args: Record<string, unknown>) {
+  const peersPage = pageItems(result.peers, getLimitArgs(args));
+  const healthPage = pageItems(result.health, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    error: result.error,
+    tailnet: result.tailnet,
+    backend_state: result.backendState,
+    self: result.self ? {
+      hostname: result.self.hostname,
+      os: result.self.os,
+      online: result.self.online,
+    } : undefined,
+    health: healthPage.items.map((message) => truncateText(message, 140)),
+    peers: peersPage.items.map((peer) => ({
+      hostname: truncateText(peer.hostname, 80),
+      os: peer.os,
+      online: peer.online,
+      latency_ms: peer.latencyMs,
+      route: truncateText(peer.latencyRoute ?? "-", 80),
+    })),
+    page: {
+      peers: pageSummary(peersPage),
+      health: pageSummary(healthPage),
+    },
+    hint: compactMcpHint(peersPage, "Pass verbose=true for peer IPs, IDs, relays, and full health rows."),
+  };
+}
+
+function compactTemperatureResult(result: TemperatureResult, args: Record<string, unknown>) {
+  const cpuPage = pageItems(result.cpu, getLimitArgs(args));
+  const gpuPage = pageItems(result.gpu, getLimitArgs(args));
+  const fanPage = pageItems(result.fans, getLimitArgs(args));
+  const alertPage = pageItems(result.alerts, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    error: result.error,
+    max_temperature_c: result.maxTemperatureC,
+    throttling_likely: result.throttlingLikely,
+    cpu: cpuPage.items.map((reading) => ({ label: truncateText(reading.label, 80), temperature_c: reading.temperatureC })),
+    gpu: gpuPage.items.map((reading) => ({ label: truncateText(reading.label, 80), temperature_c: reading.temperatureC })),
+    fans: fanPage.items.map((fan) => ({ label: truncateText(fan.label, 80), rpm: fan.rpm })),
+    alerts: alertPage.items.map((alert) => truncateText(alert, 140)),
+    page: {
+      cpu: pageSummary(cpuPage),
+      gpu: pageSummary(gpuPage),
+      fans: pageSummary(fanPage),
+      alerts: pageSummary(alertPage),
+    },
+    hint: "Compact output. Pass verbose=true for full thermal reading rows.",
+  };
+}
+
+function compactContainersResult(result: ContainersResult, args: Record<string, unknown>) {
+  const page = pageItems(result.containers, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    runtime: result.runtime,
+    error: result.error,
+    total: result.containers.length,
+    containers: page.items.map((container) => ({
+      name: truncateText(container.name, 80),
+      image: truncateText(container.image ?? "-", 80),
+      state: container.state,
+      status: truncateText(container.status ?? "-", 80),
+      cpu: container.cpuPercent,
+      memory: truncateText(container.memUsage ?? "-", 48),
+      ports: truncateText(container.ports ?? "-", 100),
+    })),
+    page: pageSummary(page),
+    hint: compactMcpHint(page, "Pass verbose=true for container IDs and IO/resource detail."),
+  };
+}
+
+function compactMcpStatusResult(result: McpStatusResult, args: Record<string, unknown>) {
+  const page = pageItems(result.servers, getLimitArgs(args));
+  return {
+    machine_id: result.machineId,
+    ok: result.ok,
+    checked_at: result.checkedAt,
+    error: result.error,
+    total: result.servers.length,
+    servers: page.items.map((server) => ({
+      name: truncateText(server.name, 80),
+      status: server.status,
+      pids: server.pids,
+      process_count: server.processCount,
+      memory_mb: server.memoryMb,
+      uptime_seconds: server.uptimeSeconds,
+    })),
+    page: pageSummary(page),
+    hint: compactMcpHint(page, "Pass verbose=true for command/raw status fields."),
+  };
+}
+
 // ── Server setup ─────────────────────────────────────────────────────────────
 
 export function buildServer(): Server {
@@ -105,11 +386,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "monitor_snapshot",
       description:
-        "Collect and return a full live system snapshot for a machine. " +
-        "Returns CPU usage/cores/load averages, memory (used/total/swap), " +
-        "disk usage per mount point, GPU stats, and a process list. " +
-        "Also includes a DoctorReport (health checks + recommended actions). " +
-        "Use this when you need a comprehensive overview of a machine's current state.",
+        "Collect a compact live system summary for a machine. " +
+        "Default output avoids full process lists and nested diagnostics. " +
+        "Pass verbose=true for the legacy full snapshot, DoctorReport, runtime health, and process list.",
       inputSchema: {
         type: "object",
         properties: {
@@ -117,18 +396,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "ID of the machine to query. Omit or use 'local' for the current machine.",
           },
+          ...compactToolProperties,
         },
       },
     },
     {
       name: "monitor_health",
       description:
-        "Run health checks on a machine and return a detailed DoctorReport. " +
+        "Run health checks on a machine and return a compact DoctorReport summary by default. " +
         "Checks CPU%, memory%, disk% per mount, GPU%, load average, and zombie process count. " +
-        "Also includes Claude MCP connection status, dead tmux pane detection, and metadata-only cloud runtime diagnostics when available. " +
-        "Each check has a status (ok/warn/critical), threshold, and current value. " +
-        "The report includes recommended actions in plain English for the AI agent. " +
-        "Use this to diagnose whether a machine needs attention.",
+        "Includes capped MCP/tmux health, metadata-only cloud runtime diagnostics when available, and recommended actions. " +
+        "Pass verbose=true for full checks, raw runtime health, and full recommendation text.",
       inputSchema: {
         type: "object",
         properties: {
@@ -136,6 +414,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "ID of the machine to check. Omit for local machine.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -156,6 +435,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Inspect every configured machine instead of just one. Default: false.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -175,6 +455,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Inspect all configured machines instead of one machine. Default: false.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -202,7 +483,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "monitor_processes",
       description:
         "List running processes on a machine. Supports filtering to find specific problem processes. " +
-        "Returns pid, name, cmd, user, cpu%, memory(MB), status, and flags for zombie/orphan. " +
+        "Default output is capped and omits command strings; use limit/cursor to page. " +
+        "Pass verbose=true for legacy full sanitized process rows including cmd, user, cpu%, memory(MB), status, and flags. " +
         "Use filter='zombies' to find zombie processes to reap. " +
         "Use filter='orphans' to find orphan processes. " +
         "Use filter='high_mem' to find memory-hungry processes. " +
@@ -223,6 +505,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "'orphans' returns processes whose parent has exited. " +
               "'high_mem' returns processes using >500 MB RAM.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -280,6 +563,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Inspect all configured machines instead of one machine. Default: false.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -287,6 +571,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "monitor_container_logs",
       description:
         "Fetch recent logs for a single container on a machine. " +
+        "Default output returns capped log lines; pass limit/cursor to page or verbose=true for the full fetched log string. " +
         "Uses the first available runtime among docker, podman, and nerdctl.",
       inputSchema: {
         type: "object",
@@ -304,6 +589,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Number of log lines to fetch. Default: 100.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -329,6 +615,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             enum: ["tcp", "udp"],
             description: "Optional protocol filter.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -348,6 +635,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Inspect all configured machines instead of one machine. Default: false.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -367,6 +655,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Inspect all configured machines instead of one machine. Default: false.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -408,13 +697,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "monitor_machines",
       description:
-        "List all configured machines with their current status and last-seen timestamp. " +
-        "Returns MachineRow[] with id, name, type (local/ssh/ec2), host, status (online/offline/unknown), " +
-        "and last_seen Unix timestamp. " +
+        "List configured machines with compact id, name, type, status, and last_seen fields by default. " +
+        "Pass verbose=true for the legacy MachineRow[] with host, SSH, EC2, tags, and created_at fields. " +
         "Use this to discover available machine IDs before calling other tools.",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          ...compactToolProperties,
+        },
       },
     },
     {
@@ -479,6 +769,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Return only unresolved alerts. Default: true.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -503,6 +794,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "boolean",
             description: "Compare app inventories across machines. Enables all=true implicitly.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -528,6 +820,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Service name or detected dev server name. Required unless action=list.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -581,15 +874,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "1 to enable, 0 to disable on creation. Default: 1.",
           },
+          ...compactToolProperties,
         },
       },
     },
     {
       name: "monitor_doctor",
       description:
-        "Run a comprehensive health analysis with AI-agent-friendly recommendations. " +
+        "Run a compact health analysis with AI-agent-friendly recommendations. " +
         "This is the best tool to call when a machine may be in trouble. " +
-        "Returns a full DoctorReport plus specific actionable recommendations formatted for an AI agent, " +
+        "Default output caps recommendations and nested runtime rows; pass verbose=true for the legacy full DoctorReport plus specific actionable recommendations, " +
         "e.g. 'machine linux-node-a is at 95% memory — recommend killing process X (PID 12345, using 2.1 GB)'. " +
         "Use this for automated triage and to decide what action to take.",
       inputSchema: {
@@ -599,6 +893,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Machine ID to diagnose. Omit for local machine.",
           },
+          ...compactToolProperties,
         },
       },
     },
@@ -606,7 +901,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "monitor_search",
       description:
         "Full-text search across machines, alerts, and processes using FTS5. " +
-        "Returns ranked results with a snippet showing the matching context. " +
+        "Default output returns capped ranked snippets without full source rows. " +
+        "Pass limit/cursor to page or verbose=true for full source rows. " +
         "Supports FTS5 query syntax: AND, OR, NOT, phrase search (\"quoted\"), prefix (word*). " +
         "Use this to find machines, alerts, or processes by name, message, or any text field.",
       inputSchema: {
@@ -622,6 +918,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: { type: "string", enum: ["machines", "alerts", "processes"] },
             description: "Tables to search. Defaults to all: machines, alerts, processes.",
           },
+          limit: {
+            type: "number",
+            description: `Maximum search results to return in compact output. Default: ${DEFAULT_SEARCH_LIMIT}.`,
+          },
+          cursor: compactToolProperties.cursor,
+          verbose: compactToolProperties.verbose,
         },
       },
     },
@@ -695,7 +997,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Use this to see which agents are currently active and what they're working on.",
       inputSchema: {
         type: "object",
-        properties: {},
+        properties: {
+          ...compactToolProperties,
+        },
       },
     },
     {
@@ -774,15 +1078,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_snapshot ──────────────────────────────────────────────────
       case "monitor_snapshot": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { snapshot, doctorReport, runtimeHealth } = await collectAndAnalyse(machineId);
-        return jsonContent({ snapshot: sanitizeSystemSnapshot(snapshot), doctorReport, runtimeHealth });
+        const diagnostics = await collectAndAnalyse(machineId);
+        if (a["verbose"] === true) {
+          const { snapshot, doctorReport, runtimeHealth } = diagnostics;
+          return jsonContent({ snapshot: sanitizeSystemSnapshot(snapshot), doctorReport, runtimeHealth });
+        }
+        return jsonContent({
+          ...compactDoctorReport(machineId, diagnostics, a),
+          hint: "Compact snapshot summary. Pass verbose=true for full snapshot, process list, DoctorReport, and runtime health.",
+        });
       }
 
       // ── monitor_health ────────────────────────────────────────────────────
       case "monitor_health": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { doctorReport, runtimeHealth } = await collectAndAnalyse(machineId);
-        return jsonContent({ ...doctorReport, runtimeHealth });
+        const diagnostics = await collectAndAnalyse(machineId);
+        if (a["verbose"] === true) {
+          return jsonContent({ ...diagnostics.doctorReport, runtimeHealth: diagnostics.runtimeHealth });
+        }
+        return jsonContent(compactDoctorReport(machineId, diagnostics, a));
       }
 
       // ── monitor_mcp_health ────────────────────────────────────────────────
@@ -791,16 +1105,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (allMachines) {
           const machineIds = listKnownMachineIds();
           const results = await collectRuntimeHealthAcrossMachines(machineIds);
+          if (a["verbose"] === true) {
+            return jsonContent(results.map((result) => ({
+              machine_id: result.machineId,
+              error: result.error,
+              runtime_health: result.diagnostics?.runtimeHealth,
+            })));
+          }
           return jsonContent(results.map((result) => ({
             machine_id: result.machineId,
             error: result.error,
-            runtime_health: result.diagnostics?.runtimeHealth,
+            runtime_health: result.diagnostics
+              ? compactRuntimeHealth(result.diagnostics.runtimeHealth, a)
+              : undefined,
+            hint: "Pass verbose=true for full runtime health.",
           })));
         }
 
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
         const { runtimeHealth } = await collectAndAnalyse(machineId);
-        return jsonContent({ machine_id: machineId, runtime_health: runtimeHealth });
+        return jsonContent({
+          machine_id: machineId,
+          runtime_health: a["verbose"] === true
+            ? runtimeHealth
+            : compactRuntimeHealth(runtimeHealth, a),
+          hint: a["verbose"] === true ? undefined : "Pass verbose=true for full runtime health.",
+        });
       }
 
       // ── monitor_mcp_status ────────────────────────────────────────────────
@@ -819,7 +1149,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = input.all
           ? await getMcpProcessStatusAcrossMachines()
           : [await getMcpProcessStatus(input.machine_id)];
-        return jsonContent(results);
+        return jsonContent(a["verbose"] === true
+          ? results
+          : results.map((result) => compactMcpStatusResult(result, a)));
       }
 
       // ── monitor_mcp_restart ───────────────────────────────────────────────
@@ -871,15 +1203,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           (a, b) => (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0)
         );
 
+        const sanitizedProcesses = filtered.map(sanitizeProcessRow);
+        if (a["verbose"] === true) {
+          return jsonContent({
+            machine_id: machineId,
+            filter,
+            total: allRows.length,
+            returned: sanitizedProcesses.length,
+            zombies: report.zombies.length,
+            orphans: report.orphans.length,
+            high_mem_count: report.highMem.length,
+            processes: sanitizedProcesses,
+          });
+        }
+
+        const page = pageItems(sanitizedProcesses, getLimitArgs(a));
         return jsonContent({
           machine_id: machineId,
           filter,
           total: allRows.length,
-          returned: filtered.length,
+          matched: sanitizedProcesses.length,
+          returned: page.items.length,
           zombies: report.zombies.length,
           orphans: report.orphans.length,
           high_mem_count: report.highMem.length,
-          processes: filtered.map(sanitizeProcessRow),
+          processes: page.items.map((process) => ({
+            pid: process.pid,
+            name: truncateText(process.name, 80),
+            cpu_percent: process.cpu_percent,
+            mem_mb: process.mem_mb,
+            status: process.status,
+            is_zombie: process.is_zombie,
+            is_orphan: process.is_orphan,
+          })),
+          page: pageSummary(page),
+          hint: compactMcpHint(page, "Pass verbose=true for full sanitized process rows including command strings."),
         });
       }
 
@@ -901,11 +1259,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? await listInstalledAppsAcrossMachines()
           : [await listInstalledApps(input.machine_id)];
 
-        return jsonContent(
-          input.compare
-            ? { results, comparison: compareInstalledApps(results) }
-            : results
-        );
+        if (a["verbose"] === true) {
+          return jsonContent(
+            input.compare
+              ? { results, comparison: compareInstalledApps(results) }
+              : results
+          );
+        }
+
+        if (input.compare) {
+          const comparison = compareInstalledApps(results);
+          const page = pageItems(comparison, getLimitArgs(a));
+          return jsonContent({
+            results: results.map((result) => ({
+              machine_id: result.machineId,
+              ok: result.ok,
+              total: result.apps.length,
+              error: result.error,
+            })),
+            comparison: page.items.map((entry) => ({
+              name: truncateText(entry.name, 80),
+              manager: entry.manager,
+              kind: entry.kind,
+              present_on: entry.presentOn,
+              missing_on: entry.missingOn,
+              versions_by_machine: entry.versionsByMachine,
+              root_owned_on: entry.rootOwnedOn,
+            })),
+            page: pageSummary(page),
+            hint: compactMcpHint(page, "Pass verbose=true for full inventories and comparison rows."),
+          });
+        }
+
+        return jsonContent(results.map((result) => compactInstalledAppsResult(result, a)));
       }
 
       // ── monitor_service ───────────────────────────────────────────────────
@@ -923,7 +1309,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         if (input.action === "list") {
-          return jsonContent(await listManagedServices(input.machine_id));
+          const result = await listManagedServices(input.machine_id);
+          return jsonContent(a["verbose"] === true ? result : compactServiceResult(result, a));
         }
 
         return jsonContent(await manageService(input.action, input.name!, input.machine_id));
@@ -979,14 +1366,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? await scanListeningPortsAcrossMachines()
           : [await scanListeningPorts(input.machine_id)];
 
-        return jsonContent(
-          results.map((result) => ({
-            ...result,
-            ports: input.protocol
-              ? result.ports.filter((port) => port.protocol === input.protocol)
-              : result.ports,
-          }))
-        );
+        const filtered = results.map((result) => ({
+          ...result,
+          ports: input.protocol
+            ? result.ports.filter((port) => port.protocol === input.protocol)
+            : result.ports,
+        }));
+
+        return jsonContent(a["verbose"] === true
+          ? filtered
+          : filtered.map((result) => compactPortsResult(result, a)));
       }
 
       // ── monitor_tailscale ─────────────────────────────────────────────────
@@ -1006,7 +1395,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? await getTailscaleStatusAcrossMachines()
           : [await getTailscaleStatus(input.machine_id)];
 
-        return jsonContent(results);
+        return jsonContent(a["verbose"] === true
+          ? results
+          : results.map((result) => compactTailscaleResult(result, a)));
       }
 
       // ── monitor_temperature ───────────────────────────────────────────────
@@ -1026,7 +1417,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? await getTemperatureStatusAcrossMachines()
           : [await getTemperatureStatus(input.machine_id)];
 
-        return jsonContent(results);
+        return jsonContent(a["verbose"] === true
+          ? results
+          : results.map((result) => compactTemperatureResult(result, a)));
       }
 
       // ── monitor_containers ────────────────────────────────────────────────
@@ -1036,7 +1429,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const results = all
           ? await listContainersAcrossMachines()
           : [await listContainers(machineId)];
-        return jsonContent(results);
+        return jsonContent(a["verbose"] === true
+          ? results
+          : results.map((result) => compactContainersResult(result, a)));
       }
 
       // ── monitor_container_logs ────────────────────────────────────────────
@@ -1054,7 +1449,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const result = await getContainerLogs(input.container, input.machine_id, input.tail);
-        return jsonContent(result);
+        if (a["verbose"] === true) {
+          return jsonContent(result);
+        }
+
+        const lines = result.logs.split(/\r?\n/).filter((line) => line.length > 0);
+        const page = pageItems(lines, getLimitArgs(a));
+        return jsonContent({
+          machine_id: result.machineId,
+          ok: result.ok,
+          runtime: result.runtime,
+          container: result.container,
+          error: result.error,
+          total_lines: lines.length,
+          logs: page.items.map((line) => truncateText(line, 240)),
+          page: pageSummary(page),
+          hint: compactMcpHint(page, "Pass verbose=true for the full log string or tail for fewer fetched lines."),
+        });
       }
 
       // ── monitor_kill ──────────────────────────────────────────────────────
@@ -1095,7 +1506,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // ── monitor_machines ──────────────────────────────────────────────────
       case "monitor_machines": {
-        let machines;
+        let machines: MachineListItem[];
         try {
           machines = listMachines();
         } catch {
@@ -1116,7 +1527,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             status: "unknown",
           }));
         }
-        return jsonContent(machines);
+        if (a["verbose"] === true) {
+          return jsonContent(machines);
+        }
+
+        const page = pageItems(machines, getLimitArgs(a));
+        return jsonContent({
+          total: machines.length,
+          machines: page.items.map((machine) => ({
+            id: machine.id,
+            name: machine.name,
+            type: machine.type,
+            status: machine.status,
+            last_seen: machine.last_seen,
+          })),
+          page: pageSummary(page),
+          hint: compactMcpHint(page, "Pass verbose=true for host, SSH, EC2, tags, and created_at fields."),
+        });
       }
 
       // ── monitor_add_machine ───────────────────────────────────────────────
@@ -1149,16 +1576,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const machineId = a["machine_id"] as string | undefined;
         const unresolvedOnly = (a["unresolved_only"] as boolean | undefined) ?? true;
 
+        let alerts;
         if (machineId) {
           const { doctorReport } = await collectAndAnalyse(machineId);
-          return jsonContent(
-            unresolvedOnly
-              ? mergeStoredAndLiveAlerts(machineId, doctorReport)
-              : listAlerts(machineId, unresolvedOnly)
-          );
+          alerts = unresolvedOnly
+            ? mergeStoredAndLiveAlerts(machineId, doctorReport)
+            : listAlerts(machineId, unresolvedOnly);
+        } else {
+          alerts = listAlerts(undefined, unresolvedOnly);
         }
 
-        return jsonContent(listAlerts(undefined, unresolvedOnly));
+        if (a["verbose"] === true) {
+          return jsonContent(alerts);
+        }
+
+        const page = pageItems(alerts, getLimitArgs(a));
+        return jsonContent({
+          total: alerts.length,
+          alerts: page.items.map((alert) => ({
+            id: alert.id,
+            machine_id: alert.machine_id,
+            severity: alert.severity,
+            check_name: alert.check_name,
+            message: truncateText(alert.message, 160),
+            triggered_at: alert.triggered_at,
+            resolved_at: alert.resolved_at,
+          })),
+          page: pageSummary(page),
+          hint: compactMcpHint(page, "Pass verbose=true for full alert rows."),
+        });
       }
 
       // ── monitor_cron_jobs ─────────────────────────────────────────────────
@@ -1174,7 +1620,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             } catch {
               jobs = [];
             }
-            return jsonContent(jobs);
+            if (a["verbose"] === true) {
+              return jsonContent(jobs);
+            }
+            const page = pageItems(jobs, getLimitArgs(a));
+            return jsonContent({
+              total: jobs.length,
+              cron_jobs: page.items.map((job) => ({
+                id: job.id,
+                machine_id: job.machine_id,
+                name: truncateText(job.name, 80),
+                schedule: job.schedule,
+                enabled: job.enabled,
+                action_type: job.action_type,
+                last_run_at: job.last_run_at,
+                last_run_status: job.last_run_status,
+              })),
+              page: pageSummary(page),
+              hint: compactMcpHint(page, "Pass verbose=true for commands and action_config."),
+            });
           }
 
           case "add": {
@@ -1235,7 +1699,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // ── monitor_doctor ────────────────────────────────────────────────────
       case "monitor_doctor": {
         const machineId = (a["machine_id"] as string | undefined) ?? "local";
-        const { snapshot, doctorReport, processReport, runtimeHealth } = await collectAndAnalyse(machineId);
+        const diagnostics = await collectAndAnalyse(machineId);
+        const { snapshot, doctorReport, processReport, runtimeHealth } = diagnostics;
 
         // Build AI-agent-friendly recommendations
         const agentRecommendations: string[] = [...doctorReport.recommendedActions];
@@ -1300,22 +1765,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        if (a["verbose"] === true) {
+          return jsonContent({
+            machine_id: machineId,
+            overall_status: doctorReport.overallStatus,
+            checks: doctorReport.checks,
+            runtime_health: runtimeHealth,
+            agent_recommendations: [...new Set(agentRecommendations)],
+            summary: {
+              cpu_percent: snapshot.cpu.usagePercent,
+              mem_percent: snapshot.mem.usagePercent,
+              mem_used_mb: snapshot.mem.usedMb,
+              mem_total_mb: snapshot.mem.totalMb,
+              load_avg: snapshot.cpu.loadAvg,
+              process_count: snapshot.processes.length,
+              zombie_count: processReport.zombies.length,
+              orphan_count: processReport.orphans.length,
+            },
+          });
+        }
+
+        const recommendationPage = pageItems([...new Set(agentRecommendations)], {
+          ...getLimitArgs(a, Math.min(DEFAULT_LIST_LIMIT, 10)),
+        });
         return jsonContent({
-          machine_id: machineId,
-          overall_status: doctorReport.overallStatus,
-          checks: doctorReport.checks,
-          runtime_health: runtimeHealth,
-          agent_recommendations: [...new Set(agentRecommendations)],
-          summary: {
-            cpu_percent: snapshot.cpu.usagePercent,
-            mem_percent: snapshot.mem.usagePercent,
-            mem_used_mb: snapshot.mem.usedMb,
-            mem_total_mb: snapshot.mem.totalMb,
-            load_avg: snapshot.cpu.loadAvg,
-            process_count: snapshot.processes.length,
-            zombie_count: processReport.zombies.length,
-            orphan_count: processReport.orphans.length,
-          },
+          ...compactDoctorReport(machineId, diagnostics, a),
+          agent_recommendations: recommendationPage.items.map((recommendation) => truncateText(recommendation, 180)),
+          recommendations_page: pageSummary(recommendationPage),
+          hint: compactMcpHint(recommendationPage, "Pass verbose=true for full checks, runtime health, and recommendation text."),
         });
       }
 
@@ -1334,7 +1811,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         try {
           const results = sanitizeSearchResults(search(query, tables));
-          return jsonContent({ query, count: results.length, results });
+          if (a["verbose"] === true) {
+            return jsonContent({ query, count: results.length, results });
+          }
+
+          const page = pageItems(results, getLimitArgs(a, DEFAULT_SEARCH_LIMIT));
+          return jsonContent({
+            query,
+            count: results.length,
+            results: page.items.map((result) => ({
+              table: result.table,
+              id: result.id,
+              rank: result.rank,
+              snippet: truncateText(result.snippet, 180),
+            })),
+            page: pageSummary(page),
+            hint: compactMcpHint(page, "Pass verbose=true for full source rows."),
+          });
         } catch (e) {
           return errorContent(String(e));
         }
@@ -1421,7 +1914,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           status: now - ag.last_seen < 300 ? "active" : "inactive",
         }));
 
-        return jsonContent(agentsWithStatus);
+        if (a["verbose"] === true) {
+          return jsonContent(agentsWithStatus);
+        }
+
+        const page = pageItems(agentsWithStatus, getLimitArgs(a));
+        return jsonContent({
+          total: agentsWithStatus.length,
+          agents: page.items.map((agent) => ({
+            id: agent.id,
+            name: truncateText(agent.name, 80),
+            status: agent.status,
+            last_seen: agent.last_seen,
+            focus: truncateText(agent.focus ?? "-", 120),
+          })),
+          page: pageSummary(page),
+          hint: compactMcpHint(page, "Pass verbose=true for parsed metadata and full focus strings."),
+        });
       }
 
       // ── monitor_configure_integrations ────────────────────────────────────
