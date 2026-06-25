@@ -1,6 +1,5 @@
 /**
- * Cloud sync module — push/pull data between a local SQLite adapter and a
- * remote PostgreSQL adapter.
+ * Storage sync module — push/pull data between local SQLite and PostgreSQL.
  */
 
 import type { DbAdapter } from "../db/adapter.js";
@@ -27,6 +26,19 @@ interface TableMeta {
   timestampCol: string | null;
 }
 
+export const STORAGE_TABLES = [
+  "machines",
+  "metrics",
+  "alerts",
+  "cron_jobs",
+  "cron_runs",
+  "doctor_rules",
+  "agents",
+  "feedback",
+] as const;
+
+export const MONITOR_STORAGE_TABLES = STORAGE_TABLES;
+
 const SYNCABLE_TABLES: Record<string, TableMeta> = {
   machines:     { pk: "id",  timestampCol: "last_seen" },
   metrics:      { pk: "id",  timestampCol: "collected_at" },
@@ -39,12 +51,12 @@ const SYNCABLE_TABLES: Record<string, TableMeta> = {
 };
 
 /**
- * Push local rows to the cloud adapter.
+ * Push local rows to the storage adapter.
  * Uses upsert semantics so re-runs are idempotent.
  */
-export async function syncToCloud(
+export async function syncToStorage(
   localAdapter: DbAdapter,
-  cloudAdapter: DbAdapter,
+  storageAdapter: DbAdapter,
   config: SyncConfig
 ): Promise<SyncResult> {
   const result: SyncResult = {
@@ -96,7 +108,7 @@ export async function syncToCloud(
           }
 
           const values = cols.map((c) => row[c]);
-          cloudAdapter.run(upsertSql, values);
+          storageAdapter.run(upsertSql, values);
           result.pushed++;
         } catch (e) {
           result.errors.push(`push ${table} row ${String(row[meta.pk])}: ${e}`);
@@ -112,11 +124,11 @@ export async function syncToCloud(
 }
 
 /**
- * Pull rows from the cloud adapter into local storage.
+ * Pull rows from the storage adapter into local SQLite.
  */
-export async function pullFromCloud(
+export async function pullFromStorage(
   localAdapter: DbAdapter,
-  cloudAdapter: DbAdapter,
+  storageAdapter: DbAdapter,
   tables?: string[]
 ): Promise<SyncResult> {
   const result: SyncResult = {
@@ -138,7 +150,7 @@ export async function pullFromCloud(
     }
 
     try {
-      const rows = cloudAdapter.all<Record<string, unknown>>(`SELECT * FROM ${table}`);
+      const rows = storageAdapter.all<Record<string, unknown>>(`SELECT * FROM ${table}`);
       if (rows.length === 0) continue;
 
       for (const row of rows) {
@@ -183,16 +195,14 @@ export async function pullFromCloud(
 
 export interface SyncStatus {
   lastSyncAt: number | null;
-  cloudConfigured: boolean;
+  storageConfigured: boolean;
   localTables: string[];
 }
 
 /**
  * Return a sync status summary without performing any sync.
  */
-export function getSyncStatus(localAdapter: DbAdapter): SyncStatus {
-  const cloudConfigured = !!process.env["MONITOR_DATABASE_URL"];
-
+export function getSyncStatus(localAdapter: DbAdapter, storageConfigured = false): SyncStatus {
   const localTables: string[] = [];
   for (const table of Object.keys(SYNCABLE_TABLES)) {
     try {
@@ -214,7 +224,7 @@ export function getSyncStatus(localAdapter: DbAdapter): SyncStatus {
     // _sync_status table doesn't exist — that's fine
   }
 
-  return { lastSyncAt, cloudConfigured, localTables };
+  return { lastSyncAt, storageConfigured, localTables };
 }
 
 /**

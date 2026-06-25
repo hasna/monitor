@@ -59,13 +59,13 @@ let _adapter: DbAdapter | null = null;
 
 /**
  * Returns a DbAdapter singleton.
- * - If MONITOR_DATABASE_URL is set, returns a PostgresAdapter.
+ * - If HASNA_MONITOR_DATABASE_URL or MONITOR_DATABASE_URL is set, returns a PostgresAdapter.
  * - Otherwise returns a SqliteAdapter wrapping the default bun:sqlite Database.
  */
 export function getAdapter(): DbAdapter {
   if (_adapter) return _adapter;
 
-  const dbUrl = process.env["MONITOR_DATABASE_URL"];
+  const dbUrl = process.env["HASNA_MONITOR_DATABASE_URL"] ?? process.env["MONITOR_DATABASE_URL"];
   if (dbUrl) {
     _adapter = new PostgresAdapter(dbUrl);
   } else {

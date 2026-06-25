@@ -220,3 +220,36 @@ export type {
 
 export { loadConfig, saveConfig, migrateConfig, initConfig } from "./config.js";
 export type { MonitorConfig, MachineConfig } from "./config.js";
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+
+export {
+  MONITOR_STORAGE_ENV,
+  MONITOR_STORAGE_FALLBACK_ENV,
+  MONITOR_STORAGE_MODE_ENV,
+  MONITOR_STORAGE_MODE_FALLBACK_ENV,
+  MONITOR_STORAGE_TABLES,
+  STORAGE_DATABASE_ENV,
+  STORAGE_MODE_ENV,
+  STORAGE_TABLES,
+  getStorageDatabaseEnv,
+  getStorageDatabaseEnvName,
+  getStorageDatabaseUrl,
+  getStorageMode,
+  getStoragePg,
+  getStorageStatus,
+  parseStorageTables,
+  resolveTables,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "./storage.js";
+export type {
+  StorageEnv,
+  StorageMode,
+  StorageStatus,
+  StorageSyncOptions,
+  SyncConfig,
+  SyncResult,
+  SyncStatus,
+} from "./storage.js";

@@ -17,7 +17,7 @@ _monitor() {
   local cur prev words cword
   _init_completion || return
 
-  local subcommands="status machines add doctor ps kill alerts apps compare-apps service containers ports tailscale temperature mcp-health mcp-status mcp-restart report cron migrate serve mcp completions help"
+  local subcommands="status machines add doctor ps kill alerts apps compare-apps service containers ports tailscale temperature mcp-health mcp-status mcp-restart report cron migrate serve mcp storage sync completions help"
 
   case "$prev" in
     monitor)
@@ -152,6 +152,11 @@ _monitor() {
       return
       ;;
 
+    storage|sync)
+      COMPREPLY=($(compgen -W "status push pull sync" -- "$cur"))
+      return
+      ;;
+
     completions)
       COMPREPLY=($(compgen -W "zsh bash install" -- "$cur"))
       return
@@ -162,7 +167,7 @@ _monitor() {
   local i subcommand=""
   for (( i=1; i < cword; i++ )); do
     case "${words[$i]}" in
-      status|machines|add|doctor|ps|kill|alerts|apps|compare-apps|service|containers|ports|tailscale|temperature|mcp-health|mcp-status|mcp-restart|report|cron|migrate|serve|mcp|completions)
+      status|machines|add|doctor|ps|kill|alerts|apps|compare-apps|service|containers|ports|tailscale|temperature|mcp-health|mcp-status|mcp-restart|report|cron|migrate|serve|mcp|storage|sync|completions)
         subcommand="${words[$i]}"
         break
         ;;
@@ -285,6 +290,13 @@ _monitor() {
           COMPREPLY=($(compgen -W "list add run" -- "$cur"))
           ;;
       esac
+      ;;
+    storage|sync)
+      if [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-t --tables -j --json" -- "$cur"))
+      else
+        COMPREPLY=($(compgen -W "status push pull sync" -- "$cur"))
+      fi
       ;;
     completions)
       COMPREPLY=($(compgen -W "zsh bash install" -- "$cur"))

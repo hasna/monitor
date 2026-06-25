@@ -14,11 +14,30 @@
     "monitor-server": "./bins/monitor-server.js",
     "monitor-web": "./bins/monitor-web.js"
   },
-  "main": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./src/index.ts"
+    },
+    "./storage": {
+      "import": "./dist/storage.js",
+      "types": "./src/storage.ts"
+    }
+  },
+  "main": "./dist/index.js",
   "types": "./src/index.ts",
+  "files": [
+    "bins",
+    "dist",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "build": "rm -rf dist && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun",
     "test": "bun test",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
@@ -38,7 +57,8 @@
     "node-ssh": "^13.2.0",
     "postgres": "^3.4.8",
     "systeminformation": "^5.22.10",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@hasna/events": "^0.1.6"
   },
   "devDependencies": {
     "@types/bun": "latest",

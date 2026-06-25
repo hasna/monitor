@@ -61,6 +61,7 @@ import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServe
 import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.js";
 import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
 import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
+import { getStorageStatus, storagePull, storagePush, storageSync } from "../storage.js";
 
 // ── Shared instances ──────────────────────────────────────────────────────────
 
@@ -742,6 +743,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "conversations (enabled, space_id, base_url?), " +
               "mementos (enabled, base_url?), " +
               "emails (enabled, to, base_url?, from?).",
+          },
+        },
+      },
+    },
+    {
+      name: "storage_status",
+      description: "Show monitor storage sync configuration and local sync history.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "storage_push",
+      description: "Push local monitor data to storage PostgreSQL.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tables: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional table names to push.",
+          },
+        },
+      },
+    },
+    {
+      name: "storage_pull",
+      description: "Pull monitor data from storage PostgreSQL to local SQLite.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tables: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional table names to pull.",
+          },
+        },
+      },
+    },
+    {
+      name: "storage_sync",
+      description: "Bidirectional monitor storage sync: pull then push.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          tables: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional table names to sync.",
           },
         },
       },
@@ -1465,6 +1516,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         return errorContent(`Unknown action: ${action}. Use 'get' or 'set'.`);
+      }
+
+      // ── storage_status ───────────────────────────────────────────────────
+      case "storage_status": {
+        return jsonContent(getStorageStatus());
+      }
+
+      // ── storage_push ─────────────────────────────────────────────────────
+      case "storage_push": {
+        const tables = a["tables"] as string[] | undefined;
+        return jsonContent(await storagePush(tables ? { tables } : undefined));
+      }
+
+      // ── storage_pull ─────────────────────────────────────────────────────
+      case "storage_pull": {
+        const tables = a["tables"] as string[] | undefined;
+        return jsonContent(await storagePull(tables ? { tables } : undefined));
+      }
+
+      // ── storage_sync ─────────────────────────────────────────────────────
+      case "storage_sync": {
+        const tables = a["tables"] as string[] | undefined;
+        return jsonContent(await storageSync(tables ? { tables } : undefined));
       }
 
       // ── monitor_send_feedback ─────────────────────────────────────────────

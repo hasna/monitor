@@ -1,4 +1,5 @@
 import { Command, InvalidOptionArgumentError } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
@@ -44,6 +45,14 @@ import {
 } from "../runtime-health.js";
 import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
+import {
+  getStorageStatus,
+  parseStorageTables,
+  storagePull,
+  storagePush,
+  storageSync,
+  type SyncResult,
+} from "../storage.js";
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
@@ -74,6 +83,108 @@ function formatUptime(seconds: number): string {
 function formatTs(ts: number | null): string {
   if (!ts) return chalk.dim("never");
   return new Date(ts * 1000).toLocaleString();
+}
+
+function printStorageResult(label: string, result: SyncResult, json?: boolean): void {
+  if (json) {
+    console.log(JSON.stringify({ ok: result.ok, result }, null, 2));
+    return;
+  }
+  if (result.errors.length > 0) {
+    for (const e of result.errors) console.error(chalk.yellow(`  Warning: ${e}`));
+  }
+  if (!result.ok) {
+    console.error(chalk.red(`  ${label} failed with errors`));
+    process.exit(1);
+  }
+  const rows = label === "Pull" ? result.pulled : result.pushed;
+  console.log(chalk.green(`  ${label} complete - ${rows} row(s)`));
+}
+
+function printStorageStatus(json?: boolean): void {
+  const status = getStorageStatus();
+  if (json) {
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+  console.log();
+  console.log(chalk.bold("  Storage Status"));
+  console.log("  " + chalk.dim("-".repeat(40)));
+  console.log(
+    `  Storage configured: ${status.configured ? chalk.green(`yes (${status.activeEnv})`) : chalk.red("no (set HASNA_MONITOR_DATABASE_URL)")}`
+  );
+  console.log(`  Mode:               ${status.mode}`);
+  console.log(`  Last sync:          ${status.lastSyncAt ? chalk.green(formatTs(status.lastSyncAt)) : chalk.dim("never")}`);
+  console.log(
+    `  Local tables:       ${status.localTables.length > 0 ? chalk.green(status.localTables.join(", ")) : chalk.dim("none")}`
+  );
+  console.log();
+}
+
+function registerStorageCommands(cmd: Command): void {
+  cmd
+    .command("status")
+    .description("Show storage sync status and last sync time")
+    .option("-j, --json", "Output JSON")
+    .action((opts) => {
+      printStorageStatus(Boolean(opts.json));
+    });
+
+  cmd
+    .command("push")
+    .description("Push local data to storage PostgreSQL")
+    .option("-t, --tables <tables>", "Comma-separated table names to push (default: all)")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        if (!opts.json) console.log(chalk.cyan("  Pushing local data to storage..."));
+        const result = await storagePush({ tables: parseStorageTables(opts.tables) });
+        printStorageResult("Push", result, Boolean(opts.json));
+      } catch (err) {
+        console.error(chalk.red(`  Error: ${err instanceof Error ? err.message : String(err)}`));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("pull")
+    .description("Pull data from storage PostgreSQL to local SQLite")
+    .option("-t, --tables <tables>", "Comma-separated table names to pull (default: all)")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        if (!opts.json) console.log(chalk.cyan("  Pulling data from storage..."));
+        const result = await storagePull({ tables: parseStorageTables(opts.tables) });
+        printStorageResult("Pull", result, Boolean(opts.json));
+      } catch (err) {
+        console.error(chalk.red(`  Error: ${err instanceof Error ? err.message : String(err)}`));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command("sync")
+    .description("Bidirectional storage sync: pull then push")
+    .option("-t, --tables <tables>", "Comma-separated table names to sync (default: all)")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts) => {
+      try {
+        if (!opts.json) console.log(chalk.cyan("  Syncing local data with storage..."));
+        const result = await storageSync({ tables: parseStorageTables(opts.tables) });
+        if (opts.json) {
+          console.log(JSON.stringify({
+            ok: result.pull.ok && result.push.ok,
+            ...result,
+          }, null, 2));
+          return;
+        }
+        printStorageResult("Pull", result.pull);
+        printStorageResult("Push", result.push);
+      } catch (err) {
+        console.error(chalk.red(`  Error: ${err instanceof Error ? err.message : String(err)}`));
+        process.exit(1);
+      }
+    });
 }
 
 function severityColor(sev: string): string {
@@ -1527,10 +1638,11 @@ program
   .command("serve")
   .description("Start the REST API and web server")
   .option("-p, --port <port>", "API port", "3847")
+  .option("-H, --host <host>", "API host/interface (default: 127.0.0.1)")
   .action(async (opts) => {
     const { startApiServer } = await import("../api/server.js");
     const port = parseInt(opts.port, 10);
-    startApiServer({ port });
+    startApiServer({ port, hostname: opts.host });
   });
 
 // ── monitor mcp ───────────────────────────────────────────────────────────────
@@ -1543,139 +1655,17 @@ program
     await startMcpServer();
   });
 
-// ── monitor sync ──────────────────────────────────────────────────────────────
+// ── monitor storage / sync ───────────────────────────────────────────────────
+
+const storageCmd = program
+  .command("storage")
+  .description("Sync local data with storage PostgreSQL (requires HASNA_MONITOR_DATABASE_URL or MONITOR_DATABASE_URL)");
+registerStorageCommands(storageCmd);
 
 const syncCmd = program
   .command("sync")
-  .description("Sync local data with a cloud PostgreSQL database (requires MONITOR_DATABASE_URL)");
-
-syncCmd
-  .command("push")
-  .description("Push local data to cloud (requires MONITOR_DATABASE_URL)")
-  .option("-t, --tables <tables>", "Comma-separated table names to push (default: all)")
-  .action(async (opts) => {
-    const dbUrl = process.env["MONITOR_DATABASE_URL"];
-    if (!dbUrl) {
-      console.error(chalk.red("  Error: MONITOR_DATABASE_URL environment variable is not set"));
-      process.exit(1);
-    }
-
-    console.log(chalk.cyan("  Pushing local data to cloud..."));
-
-    const { getAdapter } = await import("../db/client.js");
-    const { PostgresAdapter } = await import("../db/postgres-adapter.js");
-    const { syncToCloud, recordSyncTime } = await import("../sync/index.js");
-
-    const localAdapter = getAdapter();
-    const cloudAdapter = new PostgresAdapter(dbUrl);
-
-    const tables = opts.tables
-      ? (opts.tables as string).split(",").map((t: string) => t.trim()).filter(Boolean)
-      : [];
-
-    try {
-      const result = await syncToCloud(localAdapter, cloudAdapter, {
-        enabled: true,
-        direction: "push",
-        tables,
-        conflictStrategy: "local_wins",
-      });
-
-      cloudAdapter.close();
-
-      if (result.errors.length > 0) {
-        for (const e of result.errors) {
-          console.error(chalk.yellow(`  Warning: ${e}`));
-        }
-      }
-
-      if (result.ok) {
-        recordSyncTime(localAdapter, result.syncedAt);
-        console.log(chalk.green(`  Push complete — ${result.pushed} row(s) pushed`));
-      } else {
-        console.error(chalk.red("  Push failed with errors"));
-        process.exit(1);
-      }
-    } catch (err) {
-      cloudAdapter.close();
-      console.error(chalk.red(`  Error: ${err}`));
-      process.exit(1);
-    }
-  });
-
-syncCmd
-  .command("pull")
-  .description("Pull data from cloud to local (requires MONITOR_DATABASE_URL)")
-  .option("-t, --tables <tables>", "Comma-separated table names to pull (default: all)")
-  .action(async (opts) => {
-    const dbUrl = process.env["MONITOR_DATABASE_URL"];
-    if (!dbUrl) {
-      console.error(chalk.red("  Error: MONITOR_DATABASE_URL environment variable is not set"));
-      process.exit(1);
-    }
-
-    console.log(chalk.cyan("  Pulling data from cloud..."));
-
-    const { getAdapter } = await import("../db/client.js");
-    const { PostgresAdapter } = await import("../db/postgres-adapter.js");
-    const { pullFromCloud, recordSyncTime } = await import("../sync/index.js");
-
-    const localAdapter = getAdapter();
-    const cloudAdapter = new PostgresAdapter(dbUrl);
-
-    const tables = opts.tables
-      ? (opts.tables as string).split(",").map((t: string) => t.trim()).filter(Boolean)
-      : undefined;
-
-    try {
-      const result = await pullFromCloud(localAdapter, cloudAdapter, tables);
-
-      cloudAdapter.close();
-
-      if (result.errors.length > 0) {
-        for (const e of result.errors) {
-          console.error(chalk.yellow(`  Warning: ${e}`));
-        }
-      }
-
-      if (result.ok) {
-        recordSyncTime(localAdapter, result.syncedAt);
-        console.log(chalk.green(`  Pull complete — ${result.pulled} row(s) pulled`));
-      } else {
-        console.error(chalk.red("  Pull failed with errors"));
-        process.exit(1);
-      }
-    } catch (err) {
-      cloudAdapter.close();
-      console.error(chalk.red(`  Error: ${err}`));
-      process.exit(1);
-    }
-  });
-
-syncCmd
-  .command("status")
-  .description("Show sync status and last sync time")
-  .action(async () => {
-    const { getAdapter } = await import("../db/client.js");
-    const { getSyncStatus } = await import("../sync/index.js");
-
-    const localAdapter = getAdapter();
-    const status = getSyncStatus(localAdapter);
-
-    console.log();
-    console.log(chalk.bold("  Sync Status"));
-    console.log("  " + chalk.dim("-".repeat(40)));
-    console.log(
-      `  Cloud configured: ${status.cloudConfigured ? chalk.green("yes") : chalk.red("no (set MONITOR_DATABASE_URL)")}`
-    );
-    console.log(
-      `  Last sync:        ${status.lastSyncAt ? chalk.green(new Date(status.lastSyncAt * 1000).toLocaleString()) : chalk.dim("never")}`
-    );
-    console.log(
-      `  Local tables:     ${status.localTables.length > 0 ? chalk.green(status.localTables.join(", ")) : chalk.dim("none")}`
-    );
-    console.log();
-  });
+  .description("Alias for storage sync commands");
+registerStorageCommands(syncCmd);
 
 // ── monitor completions ───────────────────────────────────────────────────────
 
@@ -1715,5 +1705,7 @@ completionsCmd
 export { program };
 
 export function runCli(): void {
+registerEventsCommands(program, { source: "monitor" });
+
   program.parse(process.argv);
 }

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useSnapshot, useAlerts } from "@/hooks/useMetrics";
+import { monitorApiFetch } from "@/lib/api";
 import { formatUptime, formatPercent } from "@/lib/utils";
 
 interface DashboardProps {
@@ -21,11 +22,16 @@ export default function Dashboard({ machineId }: DashboardProps) {
   const handleKill = async (pid: number) => {
     if (!confirm(`Kill process ${pid}?`)) return;
     try {
-      await fetch(`/api/machines/${machineId}/kill`, {
+      const res = await monitorApiFetch(`/api/machines/${machineId}/kill`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pid, policy: "graceful" }),
       });
+      if (res.status === 401) {
+        alert("API token required for process control.");
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       refetch();
     } catch (err) {
       console.error("Kill failed:", err);

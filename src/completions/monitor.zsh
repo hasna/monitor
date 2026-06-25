@@ -30,6 +30,8 @@ _monitor() {
     'migrate:Migrate config from legacy locations'
     'serve:Start the REST API and web server'
     'mcp:Start the MCP server (stdio transport)'
+    'storage:Sync local data with PostgreSQL storage'
+    'sync:Alias for storage sync commands'
     'completions:Generate shell completion scripts'
     'help:Display help for a command'
   )
@@ -187,6 +189,28 @@ _monitor() {
                   _arguments '1:job-id:'
                   ;;
               esac
+              ;;
+          esac
+          ;;
+        storage|sync)
+          local -a storage_subcommands
+          storage_subcommands=(
+            'status:Show storage sync status'
+            'push:Push local data to storage'
+            'pull:Pull data from storage'
+            'sync:Pull then push data'
+          )
+          _arguments -C \
+            '1: :->storage_subcmd' \
+            '*:: :->storage_args'
+          case $state in
+            storage_subcmd)
+              _describe 'storage commands' storage_subcommands
+              ;;
+            storage_args)
+              _arguments \
+                '(-t --tables)'{-t,--tables}'[Comma-separated table names]:tables:' \
+                '(-j --json)'{-j,--json}'[Output raw JSON]'
               ;;
           esac
           ;;

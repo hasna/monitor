@@ -143,9 +143,10 @@ monitor <command> [options]
 | `serve` | Start the API server |
 | `serve --web` | Start the API + web dashboard |
 | `mcp` | Start the MCP server (stdio) |
-| `sync push` | Push metrics to remote store |
-| `sync pull` | Pull metrics from remote store |
-| `sync status` | Show sync status |
+| `storage push` | Push metrics to PostgreSQL storage |
+| `storage pull` | Pull metrics from PostgreSQL storage |
+| `storage status` | Show storage sync status |
+| `sync push|pull|status` | Compatibility alias for storage commands |
 | `completions zsh` | Print zsh completions |
 | `completions bash` | Print bash completions |
 | `completions install` | Auto-install shell completions |
@@ -425,17 +426,26 @@ monitor completions bash >> ~/.bashrc
 
 ## Database
 
-By default uses SQLite at `~/.hasna/monitor/monitor.db`. For production or multi-agent setups, use PostgreSQL:
+By default uses SQLite at `~/.hasna/monitor/monitor.db`.
 
-Set `DATABASE_URL` environment variable:
+For production or multi-agent storage sync, configure PostgreSQL with
+`HASNA_MONITOR_DATABASE_URL` or fallback `MONITOR_DATABASE_URL`:
 
 ```bash
-export DATABASE_URL="postgres://user:pass@localhost:5432/monitor"
-monitor migrate
+export HASNA_MONITOR_DATABASE_URL="postgres://user:pass@localhost:5432/monitor"
+monitor storage status
+monitor storage push --tables machines,metrics
 ```
+
+`monitor sync ...` remains as a compatibility alias for `monitor storage ...`.
+Optional storage mode env vars are `HASNA_MONITOR_STORAGE_MODE` and
+`MONITOR_STORAGE_MODE`, with `local`, `hybrid`, or `remote` values.
 
 ## Security
 
+- The REST API binds to `127.0.0.1` by default. Use `monitor serve --host 0.0.0.0` or `HASNA_MONITOR_API_HOST=0.0.0.0` only behind a trusted network or reverse proxy.
+- Mutating and diagnostic command REST routes require `Authorization: Bearer <token>` or `X-API-Key: <token>`. Set `HASNA_MONITOR_API_TOKEN` or `MONITOR_API_TOKEN` before using API routes that create/delete machines, run doctor diagnostics, kill processes, create cron jobs, or run cron jobs. The dashboard sends `VITE_MONITOR_API_TOKEN` or a browser `localStorage` value named `monitor.apiToken` when present.
+- CORS is restricted to exact trusted origins. Local dashboard origins are allowed by default; add comma-separated origins with `HASNA_MONITOR_API_CORS_ORIGINS` or `MONITOR_API_CORS_ORIGINS`.
 - Process command lines are automatically redacted before being returned to AI agents — passwords, tokens, API keys, and secrets are replaced with `***`
 - See [SECURITY.md](SECURITY.md) for the security policy and responsible disclosure process
 
