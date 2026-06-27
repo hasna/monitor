@@ -30,6 +30,13 @@ import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.j
 import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
 import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
 import { getMcpProcessStatus, getMcpProcessStatusAcrossMachines, restartMcpServer } from "../mcp-processes.js";
+import {
+  getListeningPortsLoopCheck,
+  getProcessHygieneLoopCheck,
+  getQuarantineRetentionLoopCheck,
+  getWorkspacePortsLoopCheck,
+  type MonitorLoopCheckResult,
+} from "../loop-check.js";
 import type { KillSignal } from "../process-manager/index.js";
 import {
   buildFleetHealthReport,
@@ -95,6 +102,49 @@ function parseReportPeriod(value: string): ReportPeriod {
     return value;
   }
   throw new InvalidOptionArgumentError("report period must be 'daily' or 'weekly'");
+}
+
+function parsePositiveInteger(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new InvalidOptionArgumentError("value must be a positive integer");
+  }
+  return parsed;
+}
+
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function evidenceDirFromOptions(opts: { evidence?: boolean; evidenceDir?: string }): string | false | undefined {
+  return opts.evidence === false ? false : opts.evidenceDir;
+}
+
+function addLoopCheckCommonOptions(command: Command): Command {
+  return command
+    .option("-j, --json", "Output compact JSON")
+    .option("--evidence-dir <path>", "Directory for bounded JSON evidence")
+    .option("--no-evidence", "Do not write an evidence file")
+    .option("--max-evidence-items <n>", "Maximum evidence entries per issue", parsePositiveInteger)
+    .option("--max-task-seeds <n>", "Maximum task seeds emitted", parsePositiveInteger);
+}
+
+function renderLoopCheckResult(result: MonitorLoopCheckResult, opts: { json?: boolean }): void {
+  if (opts.json) {
+    console.log(JSON.stringify(result));
+    return;
+  }
+
+  console.log(result.heartbeat);
+  for (const issue of result.issues.slice(0, 8)) {
+    const color = issue.severity === "critical" || issue.severity === "high" ? chalk.red : chalk.yellow;
+    console.log(
+      `  ${color(issue.severity.padEnd(8))} ${issue.classification} ${chalk.dim(issue.fingerprint)} ${issue.summary}`
+    );
+  }
+  if (result.issues.length > 8) {
+    console.log(chalk.dim(`  ${result.issues.length - 8} additional issue(s) in evidence`));
+  }
 }
 
 async function renderInstalledApps(
@@ -1022,6 +1072,92 @@ program
       }
       console.log();
     }
+  });
+
+// ── monitor loop-check <kind> ────────────────────────────────────────────────
+
+const loopCheckCmd = program
+  .command("loop-check")
+  .description("Run bounded loop-ready diagnostics with task seeds and no tmux dispatch");
+
+addLoopCheckCommonOptions(
+  loopCheckCmd
+    .command("listening-ports [machine]")
+    .description("Detect non-loopback listening ports that are not allowlisted")
+    .option("--allow <host:port>", "Allow an exposed host:port or *:port entry", collectOption, [])
+)
+  .action(async (machineArg: string | undefined, opts) => {
+    const result = await getListeningPortsLoopCheck({
+      machineId: machineArg ?? "local",
+      allowed: opts.allow,
+      evidenceDir: evidenceDirFromOptions(opts),
+      maxEvidenceItems: opts.maxEvidenceItems,
+      maxTaskSeeds: opts.maxTaskSeeds,
+    });
+    renderLoopCheckResult(result, opts);
+  });
+
+addLoopCheckCommonOptions(
+  loopCheckCmd
+    .command("workspace-ports")
+    .description("Detect workspace static/live port conflicts from bounded repository scans")
+    .option("--workspace <path>", "Workspace root to scan", "/home/hasna/workspace")
+    .option("--machine <id>", "Machine used for live listener scan", "local")
+    .option("--max-repos <n>", "Maximum git repositories to inspect", parsePositiveInteger)
+    .option("--max-files <n>", "Maximum candidate files to inspect", parsePositiveInteger)
+)
+  .action(async (opts) => {
+    const result = await getWorkspacePortsLoopCheck({
+      workspaceRoot: opts.workspace,
+      machineId: opts.machine,
+      maxRepos: opts.maxRepos,
+      maxFiles: opts.maxFiles,
+      evidenceDir: evidenceDirFromOptions(opts),
+      maxEvidenceItems: opts.maxEvidenceItems,
+      maxTaskSeeds: opts.maxTaskSeeds,
+    });
+    renderLoopCheckResult(result, opts);
+  });
+
+addLoopCheckCommonOptions(
+  loopCheckCmd
+    .command("process-hygiene [machine]")
+    .description("Detect zombie, orphan, high-memory, and long-running processes without killing them")
+    .option("--high-mem-mb <n>", "High-memory threshold in MiB", parsePositiveInteger)
+    .option("--stuck-hours <n>", "Long-running process threshold in hours", parsePositiveInteger)
+)
+  .action(async (machineArg: string | undefined, opts) => {
+    const result = await getProcessHygieneLoopCheck({
+      machineId: machineArg ?? "local",
+      highMemThresholdMb: opts.highMemMb,
+      stuckThresholdHours: opts.stuckHours,
+      evidenceDir: evidenceDirFromOptions(opts),
+      maxEvidenceItems: opts.maxEvidenceItems,
+      maxTaskSeeds: opts.maxTaskSeeds,
+    });
+    renderLoopCheckResult(result, opts);
+  });
+
+addLoopCheckCommonOptions(
+  loopCheckCmd
+    .command("quarantine-retention")
+    .description("Dry-run resource-pressure quarantine retention; --apply is canonical-root only")
+    .option("--root <path>", "Quarantine root to inspect", "/home/hasna/.hasna/loops/quarantine/resource-pressure")
+    .option("--max-gb <n>", "Trigger retention when quarantine exceeds N GiB", parsePositiveInteger, 100)
+    .option("--target-gb <n>", "Select eligible payloads until quarantine is near N GiB", parsePositiveInteger, 80)
+    .option("--apply", "Delete only eligible generated-cache payloads under the canonical root", false)
+)
+  .action(async (opts) => {
+    const result = await getQuarantineRetentionLoopCheck({
+      root: opts.root,
+      maxBytes: opts.maxGb * 1024 * 1024 * 1024,
+      targetBytes: opts.targetGb * 1024 * 1024 * 1024,
+      apply: opts.apply === true,
+      evidenceDir: evidenceDirFromOptions(opts),
+      maxEvidenceItems: opts.maxEvidenceItems,
+      maxTaskSeeds: opts.maxTaskSeeds,
+    });
+    renderLoopCheckResult(result, opts);
   });
 
 // ── monitor tailscale [machine] ───────────────────────────────────────────────

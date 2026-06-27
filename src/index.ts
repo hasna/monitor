@@ -221,6 +221,33 @@ export type {
 export { buildMonitorStatus, getMonitorStatus } from "./status.js";
 export type { MonitorStatusContract, MonitorStatusSnapshot } from "./status.js";
 
+// ── Loop-ready package diagnostics ───────────────────────────────────────────
+
+export {
+  classifyProcessHygieneRows,
+  classifyUnexpectedListeningPorts,
+  classifyWorkspacePortConflicts,
+  getListeningPortsLoopCheck,
+  getProcessHygieneLoopCheck,
+  getQuarantineRetentionLoopCheck,
+  getWorkspacePortsLoopCheck,
+} from "./loop-check.js";
+export type {
+  ListeningPortsLoopCheckOptions,
+  MonitorLoopCheckCommonOptions,
+  MonitorLoopCheckIssue,
+  MonitorLoopCheckKind,
+  MonitorLoopCheckResult,
+  MonitorLoopCheckSeverity,
+  MonitorLoopCheckStatus,
+  MonitorLoopCheckTaskSeed,
+  ProcessHygieneLoopCheckOptions,
+  QuarantineRetentionLoopCheckOptions,
+  WorkspaceListenerEvidence,
+  WorkspacePortEntry,
+  WorkspacePortsLoopCheckOptions,
+} from "./loop-check.js";
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 export { loadConfig, saveConfig, migrateConfig, initConfig } from "./config.js";
