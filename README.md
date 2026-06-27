@@ -256,6 +256,25 @@ monitor ports --protocol tcp # filter by protocol
 monitor ports --json         # raw JSON output
 ```
 
+### monitor loop-check
+
+Loop-ready deterministic checks emit compact heartbeats, bounded evidence, and
+deduped task seeds without dispatching tmux prompts. Add `--upsert-tasks` with
+an explicit `--todos-project` when a loop should create missing remediation
+tasks directly.
+
+```bash
+monitor loop-check listening-ports local
+monitor loop-check workspace-ports --workspace /home/hasna/workspace
+monitor loop-check process-hygiene local
+monitor loop-check quarantine-retention --apply --max-gb 100 --target-gb 80
+
+monitor loop-check workspace-ports \
+  --upsert-tasks \
+  --todos-project /home/hasna/.hasna/loops \
+  --max-task-actions 20
+```
+
 ### monitor tailscale
 
 ```bash

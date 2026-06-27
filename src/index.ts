@@ -231,6 +231,7 @@ export {
   getProcessHygieneLoopCheck,
   getQuarantineRetentionLoopCheck,
   getWorkspacePortsLoopCheck,
+  upsertMonitorLoopCheckTasks,
 } from "./loop-check.js";
 export type {
   ListeningPortsLoopCheckOptions,
@@ -240,9 +241,13 @@ export type {
   MonitorLoopCheckResult,
   MonitorLoopCheckSeverity,
   MonitorLoopCheckStatus,
+  MonitorLoopCheckTaskAction,
   MonitorLoopCheckTaskSeed,
+  MonitorLoopCheckTaskUpsertOptions,
   ProcessHygieneLoopCheckOptions,
   QuarantineRetentionLoopCheckOptions,
+  TodosCommandResult,
+  TodosCommandRunner,
   WorkspaceListenerEvidence,
   WorkspacePortEntry,
   WorkspacePortsLoopCheckOptions,

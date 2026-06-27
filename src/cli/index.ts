@@ -35,6 +35,7 @@ import {
   getProcessHygieneLoopCheck,
   getQuarantineRetentionLoopCheck,
   getWorkspacePortsLoopCheck,
+  upsertMonitorLoopCheckTasks,
   type MonitorLoopCheckResult,
 } from "../loop-check.js";
 import type { KillSignal } from "../process-manager/index.js";
@@ -126,7 +127,31 @@ function addLoopCheckCommonOptions(command: Command): Command {
     .option("--evidence-dir <path>", "Directory for bounded JSON evidence")
     .option("--no-evidence", "Do not write an evidence file")
     .option("--max-evidence-items <n>", "Maximum evidence entries per issue", parsePositiveInteger)
-    .option("--max-task-seeds <n>", "Maximum task seeds emitted", parsePositiveInteger);
+    .option("--max-task-seeds <n>", "Maximum task seeds emitted", parsePositiveInteger)
+    .option("--upsert-tasks", "Create deduped todos tasks for emitted task seeds", false)
+    .option("--todos-project <path>", "Todos project path used with --upsert-tasks")
+    .option("--task-list <id>", "Todos task list id used with --upsert-tasks")
+    .option("--todos-bin <path>", "Todos executable used with --upsert-tasks", "todos")
+    .option("--max-task-actions <n>", "Maximum task upsert actions", parsePositiveInteger);
+}
+
+function applyLoopCheckTaskUpserts(
+  result: MonitorLoopCheckResult,
+  opts: {
+    upsertTasks?: boolean;
+    todosProject?: string;
+    taskList?: string;
+    todosBin?: string;
+    maxTaskActions?: number;
+  },
+): void {
+  if (!opts.upsertTasks) return;
+  upsertMonitorLoopCheckTasks(result, {
+    project: opts.todosProject,
+    taskList: opts.taskList,
+    todosBin: opts.todosBin,
+    maxActions: opts.maxTaskActions,
+  });
 }
 
 function renderLoopCheckResult(result: MonitorLoopCheckResult, opts: { json?: boolean }): void {
@@ -136,6 +161,12 @@ function renderLoopCheckResult(result: MonitorLoopCheckResult, opts: { json?: bo
   }
 
   console.log(result.heartbeat);
+  if (result.taskActions?.length) {
+    const created = result.taskActions.filter((action) => action.action === "created").length;
+    const existing = result.taskActions.filter((action) => action.action === "existing").length;
+    const failed = result.taskActions.filter((action) => action.action === "failed").length;
+    console.log(chalk.dim(`  task_upserts created=${created} existing=${existing} failed=${failed}`));
+  }
   for (const issue of result.issues.slice(0, 8)) {
     const color = issue.severity === "critical" || issue.severity === "high" ? chalk.red : chalk.yellow;
     console.log(
@@ -145,6 +176,10 @@ function renderLoopCheckResult(result: MonitorLoopCheckResult, opts: { json?: bo
   if (result.issues.length > 8) {
     console.log(chalk.dim(`  ${result.issues.length - 8} additional issue(s) in evidence`));
   }
+}
+
+function exitOnTaskUpsertFailures(result: MonitorLoopCheckResult): void {
+  if (result.taskActions?.some((action) => action.action === "failed")) process.exit(1);
 }
 
 async function renderInstalledApps(
@@ -1094,7 +1129,9 @@ addLoopCheckCommonOptions(
       maxEvidenceItems: opts.maxEvidenceItems,
       maxTaskSeeds: opts.maxTaskSeeds,
     });
+    applyLoopCheckTaskUpserts(result, opts);
     renderLoopCheckResult(result, opts);
+    exitOnTaskUpsertFailures(result);
   });
 
 addLoopCheckCommonOptions(
@@ -1116,7 +1153,9 @@ addLoopCheckCommonOptions(
       maxEvidenceItems: opts.maxEvidenceItems,
       maxTaskSeeds: opts.maxTaskSeeds,
     });
+    applyLoopCheckTaskUpserts(result, opts);
     renderLoopCheckResult(result, opts);
+    exitOnTaskUpsertFailures(result);
   });
 
 addLoopCheckCommonOptions(
@@ -1135,7 +1174,9 @@ addLoopCheckCommonOptions(
       maxEvidenceItems: opts.maxEvidenceItems,
       maxTaskSeeds: opts.maxTaskSeeds,
     });
+    applyLoopCheckTaskUpserts(result, opts);
     renderLoopCheckResult(result, opts);
+    exitOnTaskUpsertFailures(result);
   });
 
 addLoopCheckCommonOptions(
@@ -1157,7 +1198,9 @@ addLoopCheckCommonOptions(
       maxEvidenceItems: opts.maxEvidenceItems,
       maxTaskSeeds: opts.maxTaskSeeds,
     });
+    applyLoopCheckTaskUpserts(result, opts);
     renderLoopCheckResult(result, opts);
+    exitOnTaskUpsertFailures(result);
   });
 
 // ── monitor tailscale [machine] ───────────────────────────────────────────────

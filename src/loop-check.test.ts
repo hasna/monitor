@@ -8,6 +8,8 @@ import {
   getProcessHygieneLoopCheck,
   getQuarantineRetentionLoopCheck,
   getWorkspacePortsLoopCheck,
+  upsertMonitorLoopCheckTasks,
+  type TodosCommandRunner,
 } from "./loop-check.js";
 
 function tempDir(prefix: string): string {
@@ -53,6 +55,106 @@ describe("loop-check listening-ports", () => {
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.classification).toBe("unexpected-listening-port-exposure");
     expect(result.taskSeeds[0]?.dedupeKey).toStartWith("listening-ports:");
+  });
+
+  it("upserts emitted task seeds through an argv-safe todos runner", async () => {
+    const result = await getListeningPortsLoopCheck({
+      evidenceDir: false,
+      portsResult: {
+        machineId: "local",
+        ok: true,
+        ports: [{ protocol: "tcp", host: "0.0.0.0", port: 3000, pid: 34, process: "vite" }],
+      },
+    });
+    const calls: string[][] = [];
+    const runner: TodosCommandRunner = (args) => {
+      calls.push(args);
+      if (args.includes("search")) return { status: 0, stdout: "[]", stderr: "" };
+      return { status: 0, stdout: JSON.stringify({ id: "task-1", status: "pending" }), stderr: "" };
+    };
+
+    const actions = upsertMonitorLoopCheckTasks(result, {
+      project: "/home/hasna/.hasna/loops",
+      runner,
+    });
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        action: "created",
+        dedupeKey: result.taskSeeds[0]?.dedupeKey,
+        taskId: "task-1",
+      }),
+    ]);
+    expect(calls[0]).toEqual(expect.arrayContaining(["--project", "/home/hasna/.hasna/loops", "-j", "search"]));
+    expect(calls[1]).toEqual(expect.arrayContaining(["--project", "/home/hasna/.hasna/loops", "-j", "add"]));
+    expect(calls[1]).toContain("--tags");
+    expect(calls[1]?.some((part) => part.includes("dedupe-"))).toBe(true);
+    expect(JSON.stringify(calls)).not.toContain("tmux");
+  });
+
+  it("does not create a duplicate task when the dedupe tag already exists", async () => {
+    const result = await getListeningPortsLoopCheck({
+      evidenceDir: false,
+      portsResult: {
+        machineId: "local",
+        ok: true,
+        ports: [{ protocol: "tcp", host: "0.0.0.0", port: 3000, pid: 34, process: "vite" }],
+      },
+    });
+    const calls: string[][] = [];
+    const runner: TodosCommandRunner = (args) => {
+      calls.push(args);
+      return { status: 0, stdout: JSON.stringify([{ id: "task-existing", status: "pending" }]), stderr: "" };
+    };
+
+    const actions = upsertMonitorLoopCheckTasks(result, {
+      project: "/home/hasna/.hasna/loops",
+      runner,
+    });
+
+    expect(actions[0]).toEqual(expect.objectContaining({ action: "existing", taskId: "task-existing" }));
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails bounded task upserts without a todos project", async () => {
+    const result = await getListeningPortsLoopCheck({
+      evidenceDir: false,
+      portsResult: {
+        machineId: "local",
+        ok: true,
+        ports: [{ protocol: "tcp", host: "0.0.0.0", port: 3000, pid: 34, process: "vite" }],
+      },
+    });
+
+    const actions = upsertMonitorLoopCheckTasks(result, {});
+
+    expect(actions[0]).toEqual(expect.objectContaining({ action: "failed" }));
+    expect(actions[0]?.error).toContain("--todos-project");
+  });
+
+  it("bounds todos command failure text", async () => {
+    const result = await getListeningPortsLoopCheck({
+      evidenceDir: false,
+      portsResult: {
+        machineId: "local",
+        ok: true,
+        ports: [{ protocol: "tcp", host: "0.0.0.0", port: 3000, pid: 34, process: "vite" }],
+      },
+    });
+    const runner: TodosCommandRunner = () => ({
+      status: 1,
+      stdout: "",
+      stderr: "x".repeat(2_000),
+    });
+
+    const actions = upsertMonitorLoopCheckTasks(result, {
+      project: "/home/hasna/.hasna/loops",
+      runner,
+    });
+
+    expect(actions[0]?.action).toBe("failed");
+    expect(actions[0]?.error?.length).toBeLessThan(1_100);
+    expect(actions[0]?.error).toContain("[truncated");
   });
 });
 

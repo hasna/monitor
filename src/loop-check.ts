@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -40,6 +41,14 @@ export interface MonitorLoopCheckTaskSeed {
   dedupeKey: string;
 }
 
+export interface MonitorLoopCheckTaskAction {
+  action: "created" | "existing" | "failed";
+  dedupeKey: string;
+  title: string;
+  taskId?: string;
+  error?: string;
+}
+
 export interface MonitorLoopCheckIssue {
   fingerprint: string;
   severity: MonitorLoopCheckSeverity;
@@ -59,6 +68,7 @@ export interface MonitorLoopCheckResult {
   summary: Record<string, unknown>;
   issues: MonitorLoopCheckIssue[];
   taskSeeds: MonitorLoopCheckTaskSeed[];
+  taskActions?: MonitorLoopCheckTaskAction[];
   heartbeat: string;
   evidencePath: string | null;
   bounds: {
@@ -105,6 +115,24 @@ export interface QuarantineRetentionLoopCheckOptions extends MonitorLoopCheckCom
   targetBytes?: number;
   apply?: boolean;
   protectedMarkerLimit?: number;
+}
+
+export interface TodosCommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: unknown;
+}
+
+export type TodosCommandRunner = (args: string[]) => TodosCommandResult;
+
+export interface MonitorLoopCheckTaskUpsertOptions {
+  project?: string;
+  taskList?: string;
+  todosBin?: string;
+  maxActions?: number;
+  commandTimeoutMs?: number;
+  runner?: TodosCommandRunner;
 }
 
 export interface WorkspacePortEntry {
@@ -235,6 +263,23 @@ function safeHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
+function boundedText(value: string, maxLength = 1_000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...[truncated ${value.length - maxLength} chars]` : value;
+}
+
+function safeTag(value: string): string {
+  const tag = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return tag || "unknown";
+}
+
+function dedupeTag(seed: MonitorLoopCheckTaskSeed): string {
+  return `dedupe-${safeHash(seed.dedupeKey)}`;
+}
+
 function severityRank(severity: MonitorLoopCheckSeverity): number {
   switch (severity) {
     case "critical":
@@ -269,6 +314,21 @@ function taskSeedDescription(issue: Omit<MonitorLoopCheckIssue, "taskSeed">): st
     `recommendation: ${issue.recommendation}`,
     "evidence:",
     JSON.stringify(issue.evidence, null, 2),
+  ].join("\n");
+}
+
+function taskDescription(
+  result: MonitorLoopCheckResult,
+  seed: MonitorLoopCheckTaskSeed,
+): string {
+  return [
+    `dedupe_key: ${seed.dedupeKey}`,
+    `source: @hasna/monitor loop-check ${result.kind}`,
+    `machine: ${result.machineId}`,
+    `checked_at: ${result.checkedAt}`,
+    `evidence_path: ${result.evidencePath ?? "-"}`,
+    "",
+    seed.description,
   ].join("\n");
 }
 
@@ -391,6 +451,151 @@ function finalizeLoopCheckResult(
     `evidence=${result.evidencePath ?? "-"}`,
   ].join(" ");
   return result;
+}
+
+function defaultTodosRunner(todosBin: string, timeoutMs = 30_000): TodosCommandRunner {
+  return (args) => {
+    const child = spawnSync(todosBin, args, {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: timeoutMs,
+    });
+    return {
+      status: child.status,
+      stdout: child.stdout ?? "",
+      stderr: child.stderr ?? "",
+      error: child.error,
+    };
+  };
+}
+
+function parseTaskList(stdout: string): Array<{ id?: string; status?: string }> {
+  const raw = stdout.trim();
+  if (!raw) return [];
+  const value = JSON.parse(raw) as unknown;
+  if (Array.isArray(value)) return value as Array<{ id?: string; status?: string }>;
+  if (value && typeof value === "object" && "tasks" in value && Array.isArray((value as { tasks?: unknown }).tasks)) {
+    return (value as { tasks: Array<{ id?: string; status?: string }> }).tasks;
+  }
+  return [];
+}
+
+function parseTask(stdout: string): { id?: string; status?: string } | null {
+  const raw = stdout.trim();
+  if (!raw) return null;
+  const value = JSON.parse(raw) as unknown;
+  return value && typeof value === "object" ? value as { id?: string; status?: string } : null;
+}
+
+function todosBaseArgs(project: string): string[] {
+  return ["--project", project, "-j"];
+}
+
+export function upsertMonitorLoopCheckTasks(
+  result: MonitorLoopCheckResult,
+  options: MonitorLoopCheckTaskUpsertOptions,
+): MonitorLoopCheckTaskAction[] {
+  const maxActions = options.maxActions ?? result.taskSeeds.length;
+  const seeds = result.taskSeeds.slice(0, Math.max(0, maxActions));
+  if (seeds.length === 0) {
+    result.taskActions = [];
+    return [];
+  }
+
+  if (!options.project) {
+    const actions = seeds.map((seed) => ({
+      action: "failed" as const,
+      dedupeKey: seed.dedupeKey,
+      title: seed.title,
+      error: "--todos-project is required when --upsert-tasks is used",
+    }));
+    result.taskActions = actions;
+    return actions;
+  }
+
+  const run = options.runner ?? defaultTodosRunner(options.todosBin ?? "todos", options.commandTimeoutMs);
+  const actions: MonitorLoopCheckTaskAction[] = [];
+  for (const seed of seeds) {
+    const tag = dedupeTag(seed);
+    const tags = [...new Set([...seed.tags.map(safeTag), tag])];
+    const search = run([...todosBaseArgs(options.project), "search", tag, "--tag", tag, "--limit", "10"]);
+    if (search.error || search.status !== 0) {
+      actions.push({
+        action: "failed",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        error: boundedText(String(search.error ?? (search.stderr.trim() || `todos search exited ${search.status}`))),
+      });
+      continue;
+    }
+
+    let existing: { id?: string; status?: string } | undefined;
+    try {
+      existing = parseTaskList(search.stdout).find((task) => task.id && !["done", "completed", "cancelled", "deleted"].includes(task.status ?? ""));
+    } catch (error) {
+      actions.push({
+        action: "failed",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        error: `unable to parse todos search JSON: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+
+    if (existing?.id) {
+      actions.push({
+        action: "existing",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        taskId: existing.id,
+      });
+      continue;
+    }
+
+    const addArgs = [
+      ...todosBaseArgs(options.project),
+      "add",
+      seed.title,
+      "-d",
+      taskDescription(result, seed),
+      "-p",
+      seed.priority,
+      "--tags",
+      tags.join(","),
+    ];
+    if (options.taskList) addArgs.push("--task-list", options.taskList);
+
+    const created = run(addArgs);
+    if (created.error || created.status !== 0) {
+      actions.push({
+        action: "failed",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        error: boundedText(String(created.error ?? (created.stderr.trim() || `todos add exited ${created.status}`))),
+      });
+      continue;
+    }
+
+    try {
+      const task = parseTask(created.stdout);
+      actions.push({
+        action: "created",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        taskId: task?.id,
+      });
+    } catch (error) {
+      actions.push({
+        action: "failed",
+        dedupeKey: seed.dedupeKey,
+        title: seed.title,
+        error: `unable to parse todos add JSON: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  result.taskActions = actions;
+  return actions;
 }
 
 function isLoopbackHost(host: string): boolean {
