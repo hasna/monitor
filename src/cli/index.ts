@@ -182,6 +182,20 @@ function exitOnTaskUpsertFailures(result: MonitorLoopCheckResult): void {
   if (result.taskActions?.some((action) => action.action === "failed")) process.exit(1);
 }
 
+function exitOnQuarantineRetentionFailure(result: MonitorLoopCheckResult): void {
+  if (result.summary["retentionFailed"] !== true) return;
+  const summary = result.summary;
+  console.error(
+    chalk.red(
+      `quarantine-retention failed: remaining ${summary["remainingBytes"]} bytes still exceeds cap ${summary["maxBytes"]} ` +
+        `(total ${summary["totalBytes"]}, selected ${summary["selectedBytes"]} bytes in ${summary["selectedCount"]} payloads); ` +
+        `no further selectable candidates (skippedProtected=${summary["skippedProtected"]} skippedLive=${summary["skippedLive"]}). ` +
+        `Review protected/live payloads or raise --max-gb.`
+    )
+  );
+  process.exit(1);
+}
+
 async function renderInstalledApps(
   machineArg: string | undefined,
   opts: { all?: boolean; compare?: boolean; json?: boolean },
@@ -1201,6 +1215,7 @@ addLoopCheckCommonOptions(
     applyLoopCheckTaskUpserts(result, opts);
     renderLoopCheckResult(result, opts);
     exitOnTaskUpsertFailures(result);
+    exitOnQuarantineRetentionFailure(result);
   });
 
 // ── monitor tailscale [machine] ───────────────────────────────────────────────

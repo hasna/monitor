@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { ProcessRow } from "./db/schema.js";
@@ -229,6 +230,160 @@ describe("loop-check quarantine-retention", () => {
       });
       expect(apply.status).toBe("critical");
       expect(apply.issues.some((issue) => issue.classification === "retention-apply-root-mismatch")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects an oversized payload larger than the remaining budget, largest-first", async () => {
+    const root = tempDir("monitor-quarantine-oversized-");
+    try {
+      const large = join(root, "run-1", "tmp-old-generated");
+      const small = join(root, "run-2", "tmp-old-safe-dirs");
+      mkdirSync(large, { recursive: true });
+      mkdirSync(small, { recursive: true });
+      writeFileSync(join(large, "bundle.bin"), "x".repeat(1_000));
+      writeFileSync(join(small, "cache.bin"), "y".repeat(10));
+
+      // total=1010, cap=500, target=100 → needBytes=910; the 1000-byte payload
+      // exceeds the remaining budget but must still be selectable.
+      const result = await getQuarantineRetentionLoopCheck({
+        root,
+        maxBytes: 500,
+        targetBytes: 100,
+        evidenceDir: false,
+      });
+
+      expect(result.summary["selectedCount"]).toBe(1);
+      expect(result.summary["selectedBytes"]).toBe(1_000);
+      expect(result.summary["retentionFailed"]).toBe(false);
+      const wouldDelete = result.issues[0]?.evidence.filter((entry) => entry["action"] === "would-delete") ?? [];
+      expect(wouldDelete).toHaveLength(1);
+      expect(String(wouldDelete[0]?.["path"])).toContain("tmp-old-generated");
+      expect(result.issues[0]?.classification).toBe("quarantine-over-cap");
+      expect(result.status).toBe("warn");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a critical retention failure when nothing is selectable and still over cap", async () => {
+    const root = tempDir("monitor-quarantine-stuck-");
+    try {
+      const payload = join(root, "run-1", "tmp-old-generated");
+      mkdirSync(payload, { recursive: true });
+      writeFileSync(join(payload, "data.sqlite"), "z".repeat(200));
+
+      const result = await getQuarantineRetentionLoopCheck({
+        root,
+        maxBytes: 100,
+        targetBytes: 50,
+        evidenceDir: false,
+      });
+
+      expect(result.status).toBe("critical");
+      expect(result.ok).toBe(false);
+      expect(result.summary["selectedCount"]).toBe(0);
+      expect(result.summary["retentionFailed"]).toBe(true);
+      expect(result.summary["remainingBytes"]).toBe(result.summary["totalBytes"]);
+      expect(result.issues[0]?.classification).toBe("quarantine-retention-failed");
+      expect(result.issues[0]?.summary).toContain("no further selectable candidates");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a critical retention failure when partial selection still leaves the root over cap", async () => {
+    const root = tempDir("monitor-quarantine-partial-");
+    try {
+      const protectedPayload = join(root, "run-1", "tmp-old-generated");
+      const deletablePayload = join(root, "run-2", "tmp-old-safe-dirs");
+      mkdirSync(protectedPayload, { recursive: true });
+      mkdirSync(deletablePayload, { recursive: true });
+      writeFileSync(join(protectedPayload, "session.log"), "p".repeat(500));
+      writeFileSync(join(deletablePayload, "cache.bin"), "d".repeat(100));
+
+      // total=600, cap=200: deleting the 100-byte payload still leaves 500 > cap.
+      const result = await getQuarantineRetentionLoopCheck({
+        root,
+        maxBytes: 200,
+        targetBytes: 100,
+        evidenceDir: false,
+      });
+
+      expect(result.status).toBe("critical");
+      expect(result.summary["selectedCount"]).toBe(1);
+      expect(result.summary["selectedBytes"]).toBe(100);
+      expect(result.summary["remainingBytes"]).toBe(500);
+      expect(result.summary["retentionFailed"]).toBe(true);
+      expect(result.issues[0]?.classification).toBe("quarantine-retention-failed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero from the CLI when retention cannot get under cap", () => {
+    const root = tempDir("monitor-quarantine-cli-fail-");
+    try {
+      const payload = join(root, "run-1", "tmp-old-generated");
+      mkdirSync(payload, { recursive: true });
+      const sparse = join(payload, "huge.log");
+      writeFileSync(sparse, "");
+      truncateSync(sparse, 2 * 1024 * 1024 * 1024); // 2 GiB sparse, protected by .log marker
+
+      const child = spawnSync(
+        "bun",
+        [
+          join(import.meta.dir, "..", "bins", "monitor.ts"),
+          "loop-check",
+          "quarantine-retention",
+          "--root",
+          root,
+          "--max-gb",
+          "1",
+          "--target-gb",
+          "1",
+          "--no-evidence",
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+
+      expect(child.status).toBe(1);
+      expect(child.stderr).toContain("quarantine-retention failed");
+      expect(child.stderr).toContain("still exceeds cap");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits zero from the CLI when retention selection gets under cap", () => {
+    const root = tempDir("monitor-quarantine-cli-ok-");
+    try {
+      const payload = join(root, "run-1", "tmp-old-generated");
+      mkdirSync(payload, { recursive: true });
+      const sparse = join(payload, "bundle.bin");
+      writeFileSync(sparse, "");
+      truncateSync(sparse, 2 * 1024 * 1024 * 1024); // 2 GiB sparse, deletable in dry-run
+
+      const child = spawnSync(
+        "bun",
+        [
+          join(import.meta.dir, "..", "bins", "monitor.ts"),
+          "loop-check",
+          "quarantine-retention",
+          "--root",
+          root,
+          "--max-gb",
+          "1",
+          "--target-gb",
+          "1",
+          "--no-evidence",
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+
+      expect(child.status).toBe(0);
+      expect(child.stderr).not.toContain("quarantine-retention failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

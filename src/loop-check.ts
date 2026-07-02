@@ -1482,6 +1482,9 @@ export async function getQuarantineRetentionLoopCheck(
   const canApply = apply && issues.every((issue) => issue.classification !== "retention-apply-root-mismatch");
 
   if (overCap) {
+    // Candidates are sorted largest-first. A candidate is always selectable even
+    // when it is larger than the remaining budget (needBytes - selectedBytes):
+    // deleting an oversized payload is the fastest way back under the cap.
     for (const candidate of candidates) {
       if (selectedBytes >= needBytes) break;
       const real = realpathOrNull(candidate.path);
@@ -1508,16 +1511,31 @@ export async function getQuarantineRetentionLoopCheck(
       selectedCount += 1;
     }
 
-    const issue = {
-      fingerprint: safeHash({ kind: "quarantine-retention", rootReal, totalBytes, maxBytes, selectedBytes, candidateBytes }),
-      severity: selectedBytes < needBytes ? "high" as const : "medium" as const,
-      classification: selectedBytes < needBytes ? "quarantine-retention-shortfall" : "quarantine-over-cap",
-      summary: `quarantine total ${totalBytes} bytes exceeds cap ${maxBytes}; selected ${selectedBytes} bytes`,
-      evidence: actions,
-      recommendation: apply
-        ? "Review deleted/skipped evidence and create follow-up tasks for protected or live referenced payloads."
-        : "Review dry-run evidence; use --apply only on the canonical root after confirming candidates are generated-cache payloads.",
-    };
+    const remainingBytes = totalBytes - selectedBytes;
+    const retentionFailed = remainingBytes > maxBytes;
+    const issue = retentionFailed
+      ? {
+          fingerprint: safeHash({ kind: "quarantine-retention", rootReal, totalBytes, maxBytes, selectedBytes, candidateBytes }),
+          severity: "critical" as const,
+          classification: "quarantine-retention-failed",
+          summary:
+            `quarantine retention failed: remaining ${remainingBytes} bytes still exceeds cap ${maxBytes} ` +
+            `(total ${totalBytes}, selected ${selectedBytes} in ${selectedCount} payloads); ` +
+            `no further selectable candidates (skippedProtected=${skippedProtected} skippedLive=${skippedLive})`,
+          evidence: actions,
+          recommendation:
+            "Manually review protected/live payloads under the quarantine root or raise the cap; automated retention cannot get under cap.",
+        }
+      : {
+          fingerprint: safeHash({ kind: "quarantine-retention", rootReal, totalBytes, maxBytes, selectedBytes, candidateBytes }),
+          severity: selectedBytes < needBytes ? "high" as const : "medium" as const,
+          classification: selectedBytes < needBytes ? "quarantine-retention-shortfall" : "quarantine-over-cap",
+          summary: `quarantine total ${totalBytes} bytes exceeds cap ${maxBytes}; selected ${selectedBytes} bytes`,
+          evidence: actions,
+          recommendation: apply
+            ? "Review deleted/skipped evidence and create follow-up tasks for protected or live referenced payloads."
+            : "Review dry-run evidence; use --apply only on the canonical root after confirming candidates are generated-cache payloads.",
+        };
     issues.push(withTaskSeed("quarantine-retention", issue, ["resource-pressure"]));
   }
 
@@ -1539,6 +1557,8 @@ export async function getQuarantineRetentionLoopCheck(
       candidateBytes,
       selectedCount,
       selectedBytes,
+      remainingBytes: totalBytes - selectedBytes,
+      retentionFailed: overCap && totalBytes - selectedBytes > maxBytes,
       skippedLive,
       skippedProtected,
     },
