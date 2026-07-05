@@ -1751,7 +1751,7 @@ integrationsCmd
 
 program
   .command("serve")
-  .description("Start the REST API and web server")
+  .description("Start the REST API server")
   .option("-p, --port <port>", "API port", "3847")
   .action(async (opts) => {
     const { startApiServer } = await import("../api/server.js");
