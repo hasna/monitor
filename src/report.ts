@@ -2,7 +2,7 @@ import { listKnownMachineIds } from "./collectors/index.js";
 import { inspectCloudRuntimeHealth, type CloudRuntimeHealthReport } from "./cloud-runtime.js";
 import { loadConfig } from "./config.js";
 import { getLatestMetric, getMetricsHistory, listAlerts, listMachines } from "./db/queries.js";
-import type { AlertRow, ProcessRow } from "./db/schema.js";
+import type { AlertRow, MetricRow, ProcessRow } from "./db/schema.js";
 import { collectMachineDiagnostics } from "./runtime-health.js";
 
 export const REPORT_PERIODS = {
@@ -65,6 +65,14 @@ export interface BuildFleetHealthReportOptions {
   allowLiveCloudPolling?: boolean;
   now?: number;
   cloudRuntime?: CloudRuntimeHealthReport;
+}
+
+interface StoredReportContext {
+  recentAlerts: AlertRow[];
+  unresolvedAlerts: AlertRow[];
+  latestMetric: MetricRow | null;
+  baselineMetric: MetricRow | null;
+  diskDeltaGb: number | null;
 }
 
 const STATUS_ORDER: FleetHealthReport["overallStatus"][] = ["ok", "warn", "critical", "error"];
@@ -142,20 +150,28 @@ export function shouldSkipLiveCloudCollection(
   return options.allowLiveCloudPolling !== true && getReportMachineType(machineId, options) === "ec2";
 }
 
-function skippedCloudMachineSummary(machineId: string): FleetReportMachineSummary {
+function metricMemPercent(metric: MetricRow | null): number | null {
+  if (!metric || metric.mem_total_mb <= 0) return null;
+  return (metric.mem_used_mb / metric.mem_total_mb) * 100;
+}
+
+function skippedCloudMachineSummary(
+  machineId: string,
+  stored: StoredReportContext
+): FleetReportMachineSummary {
   return {
     machineId,
     hostname: null,
     status: "warn",
     collectionSkipped: true,
     note: "Skipped live EC2 collection because live cloud polling is disabled by default; enable only after explicit approval.",
-    cpuPercent: null,
-    memPercent: null,
-    processCount: null,
-    zombieCount: null,
-    recentAlerts: 0,
-    unresolvedAlerts: 0,
-    diskDeltaGb: null,
+    cpuPercent: stored.latestMetric?.cpu_percent ?? null,
+    memPercent: metricMemPercent(stored.latestMetric),
+    processCount: stored.latestMetric?.process_count ?? null,
+    zombieCount: stored.latestMetric?.zombie_count ?? null,
+    recentAlerts: stored.recentAlerts.length,
+    unresolvedAlerts: stored.unresolvedAlerts.length,
+    diskDeltaGb: stored.diskDeltaGb,
     topProcesses: [],
   };
 }
@@ -180,6 +196,52 @@ function getRecentAlerts(machineId: string, since: number): AlertRow[] {
   return listAlerts(machineId, false).filter((alert) => alert.triggered_at >= since);
 }
 
+function readStoredReportContext(machineId: string, windowStart: number): StoredReportContext {
+  let recentAlerts: AlertRow[] = [];
+  let unresolvedAlerts: AlertRow[] = [];
+  let metricsHistory: MetricRow[] = [];
+  let latestMetric: MetricRow | null = null;
+
+  try {
+    recentAlerts = getRecentAlerts(machineId, windowStart);
+  } catch {
+    recentAlerts = [];
+  }
+
+  try {
+    unresolvedAlerts = listAlerts(machineId, true);
+  } catch {
+    unresolvedAlerts = [];
+  }
+
+  try {
+    metricsHistory = getMetricsHistory(machineId, windowStart);
+  } catch {
+    metricsHistory = [];
+  }
+
+  latestMetric = metricsHistory.at(-1) ?? null;
+  if (!latestMetric) {
+    try {
+      latestMetric = getLatestMetric(machineId) ?? null;
+    } catch {
+      latestMetric = null;
+    }
+  }
+
+  const baselineMetric = metricsHistory[0] ?? latestMetric;
+  const diskDeltaGb =
+    latestMetric && baselineMetric ? latestMetric.disk_used_gb - baselineMetric.disk_used_gb : null;
+
+  return {
+    recentAlerts,
+    unresolvedAlerts,
+    latestMetric,
+    baselineMetric,
+    diskDeltaGb,
+  };
+}
+
 export function getReportSchedule(period: ReportPeriod): string {
   return REPORT_PERIODS[period].cron;
 }
@@ -197,17 +259,10 @@ export async function buildFleetHealthReport(
 
   const machines = await Promise.all(
     machineIds.map(async (machineId): Promise<FleetReportMachineSummary> => {
+      const stored = readStoredReportContext(machineId, windowStart);
       if (shouldSkipLiveCloudCollection(machineId, options)) {
-        return skippedCloudMachineSummary(machineId);
+        return skippedCloudMachineSummary(machineId, stored);
       }
-
-      const recentAlerts = getRecentAlerts(machineId, windowStart);
-      const unresolvedAlerts = listAlerts(machineId, true);
-      const metricsHistory = getMetricsHistory(machineId, windowStart);
-      const latestMetric = metricsHistory.at(-1) ?? getLatestMetric(machineId);
-      const baselineMetric = metricsHistory[0] ?? latestMetric;
-      const diskDeltaGb =
-        latestMetric && baselineMetric ? latestMetric.disk_used_gb - baselineMetric.disk_used_gb : null;
 
       try {
         const diagnostics = await collectMachineDiagnostics(machineId);
@@ -219,9 +274,9 @@ export async function buildFleetHealthReport(
           memPercent: diagnostics.snapshot.mem.usagePercent,
           processCount: diagnostics.snapshot.processes.length,
           zombieCount: diagnostics.processReport.zombies.length,
-          recentAlerts: recentAlerts.length,
-          unresolvedAlerts: unresolvedAlerts.length,
-          diskDeltaGb,
+          recentAlerts: stored.recentAlerts.length,
+          unresolvedAlerts: stored.unresolvedAlerts.length,
+          diskDeltaGb: stored.diskDeltaGb,
           topProcesses: summariseTopProcesses(diagnostics.processRows),
         };
       } catch (error) {
@@ -233,9 +288,9 @@ export async function buildFleetHealthReport(
           memPercent: null,
           processCount: null,
           zombieCount: null,
-          recentAlerts: recentAlerts.length,
-          unresolvedAlerts: unresolvedAlerts.length,
-          diskDeltaGb,
+          recentAlerts: stored.recentAlerts.length,
+          unresolvedAlerts: stored.unresolvedAlerts.length,
+          diskDeltaGb: stored.diskDeltaGb,
           topProcesses: [],
           error: String(error),
         };
