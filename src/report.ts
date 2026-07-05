@@ -1,4 +1,5 @@
 import { listKnownMachineIds } from "./collectors/index.js";
+import { inspectCloudRuntimeHealth, type CloudRuntimeHealthReport } from "./cloud-runtime.js";
 import { getLatestMetric, getMetricsHistory, listAlerts } from "./db/queries.js";
 import type { AlertRow, ProcessRow } from "./db/schema.js";
 import { collectMachineDiagnostics } from "./runtime-health.js";
@@ -46,6 +47,7 @@ export interface FleetHealthReport {
   generatedAt: number;
   windowStart: number;
   overallStatus: "ok" | "warn" | "critical" | "error";
+  cloudRuntime: CloudRuntimeHealthReport;
   machineCount: number;
   reachableMachineCount: number;
   recentAlerts: number;
@@ -57,6 +59,7 @@ export interface BuildFleetHealthReportOptions {
   period?: ReportPeriod;
   machineIds?: string[];
   now?: number;
+  cloudRuntime?: CloudRuntimeHealthReport;
 }
 
 const STATUS_ORDER: FleetHealthReport["overallStatus"][] = ["ok", "warn", "critical", "error"];
@@ -97,6 +100,12 @@ function normalizeMachineStatus(status: string): FleetReportMachineSummary["stat
   return "warn";
 }
 
+function normalizeCloudStatus(status: CloudRuntimeHealthReport["overallStatus"]): FleetHealthReport["overallStatus"] {
+  if (status === "critical") return "critical";
+  if (status === "warn" || status === "unknown") return "warn";
+  return "ok";
+}
+
 function summariseTopProcesses(processRows: ProcessRow[]): FleetReportProcessSummary[] {
   return [...processRows]
     .sort((left, right) => {
@@ -130,6 +139,7 @@ export async function buildFleetHealthReport(
   const reportWindow = REPORT_PERIODS[period];
   const windowStart = generatedAtSeconds - reportWindow.windowSeconds;
   const machineIds = options.machineIds ?? listKnownMachineIds();
+  const cloudRuntime = options.cloudRuntime ?? inspectCloudRuntimeHealth({ now: generatedAt });
 
   const machines = await Promise.all(
     machineIds.map(async (machineId): Promise<FleetReportMachineSummary> => {
@@ -177,7 +187,7 @@ export async function buildFleetHealthReport(
 
   const overallStatus = machines.reduce<FleetHealthReport["overallStatus"]>(
     (status, machine) => maxStatus(status, machine.status),
-    "ok"
+    normalizeCloudStatus(cloudRuntime.overallStatus)
   );
 
   return {
@@ -186,6 +196,7 @@ export async function buildFleetHealthReport(
     generatedAt,
     windowStart,
     overallStatus,
+    cloudRuntime,
     machineCount: machines.length,
     reachableMachineCount: machines.filter((machine) => machine.status !== "error").length,
     recentAlerts: machines.reduce((sum, machine) => sum + machine.recentAlerts, 0),
@@ -206,6 +217,7 @@ export function formatFleetHealthReportText(report: FleetHealthReport): string {
     `Overall: ${report.overallStatus.toUpperCase()}`,
     `Fleet: ${report.reachableMachineCount}/${report.machineCount} machines reachable`,
     `Alerts: ${report.recentAlerts} recent, ${report.unresolvedAlerts} unresolved`,
+    `Cloud Runtime: ${report.cloudRuntime.overallStatus.toUpperCase()} (${report.cloudRuntime.counts.configured} configured, ${report.cloudRuntime.counts.observed} observed)`,
     "",
   ];
 
@@ -262,7 +274,7 @@ export function formatFleetHealthReportHtml(report: FleetHealthReport): string {
   return [
     `<h2 style="font-family:system-ui,sans-serif;margin:0 0 12px">open-monitor ${escapeHtml(report.label)} fleet health report</h2>`,
     `<p style="font-family:system-ui,sans-serif;color:#374151">Generated ${escapeHtml(new Date(report.generatedAt).toISOString())}<br/>Window start ${escapeHtml(new Date(report.windowStart * 1000).toISOString())}</p>`,
-    `<p style="font-family:system-ui,sans-serif"><strong>Overall:</strong> ${escapeHtml(report.overallStatus.toUpperCase())}<br/><strong>Fleet:</strong> ${report.reachableMachineCount}/${report.machineCount} machines reachable<br/><strong>Alerts:</strong> ${report.recentAlerts} recent, ${report.unresolvedAlerts} unresolved</p>`,
+    `<p style="font-family:system-ui,sans-serif"><strong>Overall:</strong> ${escapeHtml(report.overallStatus.toUpperCase())}<br/><strong>Fleet:</strong> ${report.reachableMachineCount}/${report.machineCount} machines reachable<br/><strong>Alerts:</strong> ${report.recentAlerts} recent, ${report.unresolvedAlerts} unresolved<br/><strong>Cloud Runtime:</strong> ${escapeHtml(report.cloudRuntime.overallStatus.toUpperCase())} (${report.cloudRuntime.counts.configured} configured, ${report.cloudRuntime.counts.observed} observed)</p>`,
     `<table style="border-collapse:collapse;font-family:system-ui,sans-serif;width:100%">`,
     "<thead><tr>",
     '<th style="text-align:left;padding:8px 12px;border-bottom:2px solid #111827">Machine</th>',
@@ -279,7 +291,7 @@ export function formatFleetHealthReportHtml(report: FleetHealthReport): string {
 }
 
 export function formatFleetHealthReportSummary(report: FleetHealthReport): string {
-  return `period=${report.period} status=${report.overallStatus} machines=${report.machineCount} reachable=${report.reachableMachineCount} recent_alerts=${report.recentAlerts} unresolved_alerts=${report.unresolvedAlerts}`;
+  return `period=${report.period} status=${report.overallStatus} machines=${report.machineCount} reachable=${report.reachableMachineCount} recent_alerts=${report.recentAlerts} unresolved_alerts=${report.unresolvedAlerts} cloud_status=${report.cloudRuntime.overallStatus} cloud_configured=${report.cloudRuntime.counts.configured} cloud_observed=${report.cloudRuntime.counts.observed}`;
 }
 
 export function formatFleetHealthReportMachineLine(machine: FleetReportMachineSummary): string {

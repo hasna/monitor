@@ -294,6 +294,29 @@ monitor report --schedule daily      # create/update a 9:00 daily cron report
 monitor report --schedule weekly     # create/update a Monday 9:00 weekly cron report
 ```
 
+### Cloud runtime diagnostics
+
+`monitor health`, `monitor doctor`, and `monitor report` include metadata-only
+cloud runtime diagnostics. These checks make the runtime boundary explicit:
+
+- Local SQLite and local config files are always the default runtime store.
+- `MONITOR_DATABASE_URL` switches package storage/sync diagnostics to remote
+  Postgres/RDS metadata, but status output never prints the URL, host, user, or
+  password.
+- S3/object-store diagnostics are enabled by configuration environment names
+  such as `MONITOR_S3_BUCKET`, `MONITOR_S3_PREFIX`, or
+  `MONITOR_OBJECT_STORE_BUCKET`; reports show aggregate readiness only.
+- EC2 machine configs remain on-demand/read-only through CloudWatch/SSM
+  collectors when a machine is explicitly inspected.
+- ECS and RDS health are modeled through provider-injected read-only
+  observations. The default CLI path does not poll live AWS accounts, mutate AWS
+  resources, create secrets, deploy services, run Terraform, or increase spend.
+
+Cloud diagnostics are safe for task loops and reports because they expose only
+configured/observed counts, statuses, and threshold percentages. Cloud
+identifiers such as bucket names, ARNs, hostnames, private paths, and credential
+values are intentionally excluded.
+
 ## Web Dashboard
 
 ```bash
@@ -460,10 +483,10 @@ monitor completions bash >> ~/.bashrc
 
 By default uses SQLite at `~/.hasna/monitor/monitor.db`. For production or multi-agent setups, use PostgreSQL:
 
-Set `DATABASE_URL` environment variable:
+Set `MONITOR_DATABASE_URL` environment variable:
 
 ```bash
-export DATABASE_URL="postgres://user:pass@localhost:5432/monitor"
+export MONITOR_DATABASE_URL="postgres://monitor-db.example.internal:5432/monitor"
 monitor migrate
 ```
 

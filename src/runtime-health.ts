@@ -5,6 +5,12 @@ import type { DoctorCheck, DoctorReport, DoctorStatus, AlertSeverity } from "./d
 import type { Collector } from "./collectors/index.js";
 import { getCollectorForMachine, listKnownMachineIds } from "./collectors/index.js";
 import type { SystemSnapshot } from "./collectors/local.js";
+import {
+  buildCloudRuntimeDoctorChecks,
+  inspectCloudRuntimeHealth,
+  type CloudRuntimeHealthReport,
+  type CloudRuntimeInspectionOptions,
+} from "./cloud-runtime.js";
 import { ProcessManager, processInfoToRow } from "./process-manager/index.js";
 import { sanitizeCmd } from "./security.js";
 
@@ -60,6 +66,7 @@ export interface TmuxHealthReport {
 export interface RuntimeHealthReport {
   mcp: McpHealthReport;
   tmux: TmuxHealthReport;
+  cloud: CloudRuntimeHealthReport;
   checks: DoctorCheck[];
   recommendedActions: string[];
 }
@@ -221,14 +228,18 @@ async function inspectTmuxHealth(collector: Collector): Promise<TmuxHealthReport
   };
 }
 
-export async function inspectRuntimeHealth(collector: Collector): Promise<RuntimeHealthReport> {
+export async function inspectRuntimeHealth(
+  collector: Collector,
+  options: { cloud?: CloudRuntimeInspectionOptions } = {}
+): Promise<RuntimeHealthReport> {
   const [mcp, tmux] = await Promise.all([
     inspectClaudeMcpHealth(collector),
     inspectTmuxHealth(collector),
   ]);
+  const cloud = inspectCloudRuntimeHealth(options.cloud);
 
-  const checks: DoctorCheck[] = [];
-  const recommendedActions: string[] = [];
+  const checks: DoctorCheck[] = buildCloudRuntimeDoctorChecks(cloud);
+  const recommendedActions: string[] = [...cloud.recommendedActions];
 
   if (!mcp.available) {
     checks.push(buildCheck("mcp:summary", "warn", `Unable to inspect Claude MCP servers: ${mcp.error}`));
@@ -292,6 +303,7 @@ export async function inspectRuntimeHealth(collector: Collector): Promise<Runtim
   return {
     mcp,
     tmux,
+    cloud,
     checks,
     recommendedActions: [...new Set(recommendedActions)],
   };

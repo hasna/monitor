@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { inspectCloudRuntimeHealth } from "./cloud-runtime.js";
 import type { FleetHealthReport } from "./report.js";
 import {
   formatFleetHealthReportHtml,
@@ -16,6 +17,30 @@ function makeReport(): FleetHealthReport {
     generatedAt: Date.parse("2026-04-10T10:00:00.000Z"),
     windowStart: Math.floor(Date.parse("2026-04-09T10:00:00.000Z") / 1000),
     overallStatus: "warn",
+    cloudRuntime: inspectCloudRuntimeHealth({
+      now: Date.parse("2026-04-10T10:00:00.000Z"),
+      env: {
+        MONITOR_DATABASE_URL: "configured",
+        MONITOR_ECS_CLUSTER: "configured",
+      },
+      observations: {
+        postgres: {
+          reachable: true,
+          latencyMs: 25,
+        },
+        ecs: {
+          desiredTaskCount: 2,
+          runningTaskCount: 1,
+          pendingTaskCount: 1,
+        },
+        rds: {
+          reachable: true,
+          connectionUtilizationPercent: 70,
+          cpuUtilizationPercent: 30,
+          freeStoragePercent: 55,
+        },
+      },
+    }),
     machineCount: 2,
     reachableMachineCount: 1,
     recentAlerts: 3,
@@ -61,7 +86,9 @@ describe("report formatting", () => {
 
     expect(getFleetHealthReportSubject(report)).toContain("Daily fleet health report");
     expect(formatFleetHealthReportSummary(report)).toContain("period=daily");
+    expect(formatFleetHealthReportSummary(report)).toContain("cloud_status=warn");
     expect(formatFleetHealthReportText(report)).toContain("linux-node-a: WARN");
+    expect(formatFleetHealthReportText(report)).toContain("Cloud Runtime: WARN");
     expect(formatFleetHealthReportText(report)).toContain("Top memory: bun(123, 712 MB, 4.2% CPU)");
     expect(formatFleetHealthReportMachineLine(report.machines[0]!)).toContain("disk_delta=+2.4 GB");
   });
@@ -70,6 +97,7 @@ describe("report formatting", () => {
     const html = formatFleetHealthReportHtml(makeReport());
 
     expect(html).toContain("open-monitor Daily fleet health report");
+    expect(html).toContain("Cloud Runtime");
     expect(html).toContain("linux-node-a.local");
     expect(html).toContain("ssh timeout &lt;bad&gt;");
   });

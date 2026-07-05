@@ -6,6 +6,17 @@ import {
   parseClaudeMcpListOutput,
   parseTmuxPaneListOutput,
 } from "./runtime-health.js";
+import type { MonitorConfig } from "./config.js";
+
+const cloudTestConfig: MonitorConfig = {
+  machines: [
+    {
+      id: "local",
+      label: "Local",
+      type: "local",
+    },
+  ],
+};
 
 function makeCommandResult(overrides: Partial<CommandResult> = {}): CommandResult {
   return {
@@ -134,12 +145,13 @@ describe("inspectRuntimeHealth", () => {
         }),
     });
 
-    const report = await inspectRuntimeHealth(collector);
+    const report = await inspectRuntimeHealth(collector, { cloud: { config: cloudTestConfig, env: {} } });
 
     expect(report.mcp.connectedCount).toBe(1);
     expect(report.mcp.failedCount).toBe(0);
     expect(report.tmux.noServer).toBe(true);
     expect(report.tmux.deadCount).toBe(0);
+    expect(report.cloud.boundary.localStore).toBe("sqlite");
     expect(report.checks.find((check) => check.name === "tmux:summary")?.status).toBe("ok");
   });
 
@@ -160,7 +172,7 @@ describe("inspectRuntimeHealth", () => {
         }),
     });
 
-    const report = await inspectRuntimeHealth(collector);
+    const report = await inspectRuntimeHealth(collector, { cloud: { config: cloudTestConfig, env: {} } });
 
     expect(report.mcp.connectedCount).toBe(1);
     expect(report.mcp.failedCount).toBe(1);
@@ -184,7 +196,7 @@ describe("inspectRuntimeHealth", () => {
         }),
     });
 
-    const report = await inspectRuntimeHealth(collector);
+    const report = await inspectRuntimeHealth(collector, { cloud: { config: cloudTestConfig, env: {} } });
     const serialized = JSON.stringify(report);
 
     expect(serialized).not.toContain("runtime-secret");

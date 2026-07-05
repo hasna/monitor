@@ -373,6 +373,7 @@ program
     console.log(`  Services: ${status.counts.services.total} counted, ${status.counts.services.failed} failed`);
     console.log(`  Alerts:   ${status.counts.alerts.total} total, ${status.counts.alerts.critical} critical`);
     console.log(`  Cron:     ${status.counts.cronJobs.enabled} enabled, ${status.counts.cronJobs.disabled} disabled`);
+    console.log(`  Cloud:    ${status.counts.cloudRuntime.configured} configured, ${status.counts.cloudRuntime.observed} observed`);
     console.log();
   });
 

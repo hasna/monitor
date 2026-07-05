@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { inspectCloudRuntimeHealth } from "../cloud-runtime.js";
 import type { FleetHealthReport } from "../report.js";
 import { runReportIntegrations } from "./index.js";
 
@@ -9,6 +10,18 @@ function makeReport(): FleetHealthReport {
     generatedAt: Date.parse("2026-04-10T10:00:00.000Z"),
     windowStart: Math.floor(Date.parse("2026-04-03T10:00:00.000Z") / 1000),
     overallStatus: "critical",
+    cloudRuntime: inspectCloudRuntimeHealth({
+      config: {
+        machines: [
+          {
+            id: "local",
+            label: "Local",
+            type: "local",
+          },
+        ],
+      },
+      env: {},
+    }),
     machineCount: 1,
     reachableMachineCount: 1,
     recentAlerts: 5,
