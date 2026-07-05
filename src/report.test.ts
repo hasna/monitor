@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { inspectCloudRuntimeHealth } from "./cloud-runtime.js";
 import type { FleetHealthReport } from "./report.js";
 import {
+  buildFleetHealthReport,
   formatFleetHealthReportHtml,
   formatFleetHealthReportMachineLine,
   formatFleetHealthReportSummary,
@@ -105,5 +106,41 @@ describe("report formatting", () => {
   it("returns the expected built-in cron schedules", () => {
     expect(getReportSchedule("daily")).toBe("0 9 * * *");
     expect(getReportSchedule("weekly")).toBe("0 9 * * 1");
+  });
+
+  it("skips EC2 live collection by default in fleet reports", async () => {
+    const report = await buildFleetHealthReport({
+      now: Date.parse("2026-04-10T10:00:00.000Z"),
+      machineIds: ["prod-ec2"],
+      machineTypes: {
+        "prod-ec2": "ec2",
+      },
+      cloudRuntime: inspectCloudRuntimeHealth({
+        config: {
+          machines: [
+            {
+              id: "prod-ec2",
+              label: "Prod EC2",
+              type: "ec2",
+              ec2: {
+                instanceId: "i-private123",
+                region: "us-east-1",
+              },
+            },
+          ],
+        },
+        env: {},
+      }),
+    });
+
+    expect(report.overallStatus).toBe("warn");
+    expect(report.reachableMachineCount).toBe(0);
+    expect(report.machines[0]).toMatchObject({
+      machineId: "prod-ec2",
+      status: "warn",
+      collectionSkipped: true,
+      cpuPercent: null,
+    });
+    expect(formatFleetHealthReportText(report)).toContain("Skipped live EC2 collection");
   });
 });

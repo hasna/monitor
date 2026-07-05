@@ -133,6 +133,34 @@ describe("inspectCloudRuntimeHealth", () => {
     expect(serialized).not.toContain("i-private123");
   });
 
+  it("marks configured EC2 without dry-run observations as unknown", () => {
+    const report = inspectCloudRuntimeHealth({
+      config: {
+        machines: [
+          ...localConfig.machines,
+          {
+            id: "prod-ec2",
+            label: "Prod EC2",
+            type: "ec2",
+            ec2: {
+              instanceId: "i-private123",
+              region: "us-east-1",
+            },
+          },
+        ],
+      },
+      env: {},
+    });
+
+    const ec2 = report.diagnostics.find((item) => item.source === "aws_ec2");
+    expect(ec2).toMatchObject({
+      status: "unknown",
+      configured: true,
+      observed: false,
+    });
+    expect(report.overallStatus).toBe("unknown");
+  });
+
   it("supports provider-injected observations for future cloud clients", async () => {
     const report = await inspectCloudRuntimeHealthWithProvider(
       {

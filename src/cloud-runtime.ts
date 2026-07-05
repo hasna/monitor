@@ -315,6 +315,21 @@ function ec2Diagnostic(config: MonitorConfig, observation: CloudRuntimeEc2Observ
     );
   }
 
+  if (!observation) {
+    return diagnostic(
+      "aws_ec2",
+      "unknown",
+      true,
+      false,
+      "EC2 machines are configured, but no read-only CloudWatch/SSM dry-run observation was supplied.",
+      {
+        configuredMachines: ec2Count,
+        cloudWatchMetricCount: null,
+        cloudWatchErrorCount: null,
+      }
+    );
+  }
+
   const errorCount = observation?.cloudWatchErrorCount ?? 0;
   const fallback = errorCount > 0 ? "warn" : "ok";
   const status = statusFromObservation(observation?.status, fallback);

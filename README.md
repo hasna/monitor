@@ -292,6 +292,7 @@ monitor report --period weekly       # preview weekly fleet report
 monitor report --send                # send via configured conversations/emails integrations
 monitor report --schedule daily      # create/update a 9:00 daily cron report
 monitor report --schedule weekly     # create/update a Monday 9:00 weekly cron report
+monitor report --allow-live-cloud-polling  # include EC2/cloud machines only after explicit approval
 ```
 
 ### Cloud runtime diagnostics
