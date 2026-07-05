@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { inspectCloudRuntimeHealth } from "./cloud-runtime.js";
+import { closeDb } from "./db/client.js";
+import { insertAlert, insertMachine, insertMetric } from "./db/queries.js";
 import type { FleetHealthReport } from "./report.js";
 import {
   buildFleetHealthReport,
@@ -142,5 +147,97 @@ describe("report formatting", () => {
       cpuPercent: null,
     });
     expect(formatFleetHealthReportText(report)).toContain("Skipped live EC2 collection");
+  });
+
+  it("preserves stored EC2 alert and metric counts when live collection is skipped", async () => {
+    const previousConfigDir = process.env["MONITOR_CONFIG_DIR"];
+    const configDir = mkdtempSync(join(tmpdir(), "monitor-report-"));
+    const nowSeconds = Math.floor(Date.parse("2026-04-10T10:00:00.000Z") / 1000);
+    process.env["MONITOR_CONFIG_DIR"] = configDir;
+    closeDb();
+
+    try {
+      insertMachine({
+        id: "prod-ec2",
+        name: "Prod EC2",
+        type: "ec2",
+        host: null,
+        port: null,
+        ssh_key_path: null,
+        aws_region: "us-east-1",
+        aws_instance_id: "i-private123",
+        tags: "{}",
+        last_seen: null,
+        status: "unknown",
+      });
+      insertAlert({
+        machine_id: "prod-ec2",
+        triggered_at: nowSeconds - 60,
+        resolved_at: null,
+        severity: "critical",
+        check_name: "stored-cloud-alert",
+        message: "Stored alert evidence",
+        auto_resolved: 0,
+      });
+      insertMetric({
+        machine_id: "prod-ec2",
+        collected_at: nowSeconds - 60,
+        cpu_percent: 72,
+        mem_used_mb: 512,
+        mem_total_mb: 1024,
+        swap_used_mb: 0,
+        disk_used_gb: 20,
+        disk_total_gb: 100,
+        gpu_percent: null,
+        gpu_mem_used_mb: null,
+        gpu_mem_total_mb: null,
+        load_avg_1: 1,
+        load_avg_5: 1,
+        load_avg_15: 1,
+        process_count: 12,
+        zombie_count: 1,
+      });
+
+      const report = await buildFleetHealthReport({
+        now: Date.parse("2026-04-10T10:00:00.000Z"),
+        machineIds: ["prod-ec2"],
+        cloudRuntime: inspectCloudRuntimeHealth({
+          config: {
+            machines: [
+              {
+                id: "prod-ec2",
+                label: "Prod EC2",
+                type: "ec2",
+                ec2: {
+                  instanceId: "i-private123",
+                  region: "us-east-1",
+                },
+              },
+            ],
+          },
+          env: {},
+        }),
+      });
+
+      expect(report.recentAlerts).toBe(1);
+      expect(report.unresolvedAlerts).toBe(1);
+      expect(report.machines[0]).toMatchObject({
+        collectionSkipped: true,
+        recentAlerts: 1,
+        unresolvedAlerts: 1,
+        cpuPercent: 72,
+        memPercent: 50,
+        processCount: 12,
+        zombieCount: 1,
+      });
+    } finally {
+      closeDb();
+      if (previousConfigDir === undefined) {
+        delete process.env["MONITOR_CONFIG_DIR"];
+      } else {
+        process.env["MONITOR_CONFIG_DIR"] = previousConfigDir;
+      }
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });
