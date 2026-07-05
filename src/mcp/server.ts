@@ -125,7 +125,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         "Run health checks on a machine and return a detailed DoctorReport. " +
         "Checks CPU%, memory%, disk% per mount, GPU%, load average, and zombie process count. " +
-        "Also includes Claude MCP connection status and dead tmux pane detection when available. " +
+        "Also includes Claude MCP connection status, dead tmux pane detection, and metadata-only cloud runtime diagnostics when available. " +
         "Each check has a status (ok/warn/critical), threshold, and current value. " +
         "The report includes recommended actions in plain English for the AI agent. " +
         "Use this to diagnose whether a machine needs attention.",

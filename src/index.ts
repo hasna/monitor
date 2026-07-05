@@ -216,6 +216,29 @@ export type {
   FleetReportProcessSummary,
 } from "./report.js";
 
+// ── Cloud runtime diagnostics ────────────────────────────────────────────────
+
+export {
+  buildCloudRuntimeDoctorChecks,
+  inspectCloudRuntimeHealth,
+  inspectCloudRuntimeHealthWithProvider,
+  summarizeCloudRuntimeHealth,
+} from "./cloud-runtime.js";
+export type {
+  CloudRuntimeDiagnostic,
+  CloudRuntimeDiagnosticSource,
+  CloudRuntimeEcsObservation,
+  CloudRuntimeEc2Observation,
+  CloudRuntimeHealthReport,
+  CloudRuntimeInspectionOptions,
+  CloudRuntimeObjectStoreObservation,
+  CloudRuntimeObservationProvider,
+  CloudRuntimeObservations,
+  CloudRuntimePostgresObservation,
+  CloudRuntimeRdsObservation,
+  CloudRuntimeSummaryCounts,
+} from "./cloud-runtime.js";
+
 // ── Metadata-only status contract ────────────────────────────────────────────
 
 export { buildMonitorStatus, getMonitorStatus } from "./status.js";

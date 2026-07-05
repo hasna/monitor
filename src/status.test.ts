@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { inspectCloudRuntimeHealth } from "./cloud-runtime";
 import { buildMonitorStatus } from "./status";
 import type { MonitorConfig } from "./config";
 
@@ -106,6 +107,15 @@ describe("buildMonitorStatus", () => {
       databaseReachable: true,
       servicesReachable: false,
       cloudDatabaseConfigured: true,
+      cloudRuntime: inspectCloudRuntimeHealth({
+        config,
+        env: {
+          MONITOR_DATABASE_URL: "configured-rds-private.internal",
+          MONITOR_S3_BUCKET: "private-monitor-bucket",
+          MONITOR_ECS_CLUSTER: "private-cluster",
+          MONITOR_ECS_SERVICE: "private-service",
+        },
+      }),
       packageVersion: "0.0.0-test",
     });
 
@@ -146,12 +156,29 @@ describe("buildMonitorStatus", () => {
           active: 1,
           inactive: 0,
         },
+        cloudRuntime: {
+          total: 7,
+          configured: 6,
+          observed: 2,
+          unknown: 4,
+          bySource: {
+            local_sqlite: "ok",
+            remote_postgres: "unknown",
+            object_store: "unknown",
+            aws_ec2: "ok",
+            aws_ecs: "unknown",
+            aws_rds: "unknown",
+            package: "ok",
+          },
+        },
       },
       health: {
         status: "warn",
         hasCriticalAlerts: true,
         hasFailedServices: true,
         hasOfflineMachines: true,
+        hasCloudRuntimeWarnings: false,
+        hasUnobservedConfiguredCloudRuntime: true,
       },
       safety: {
         includesLogs: false,
@@ -160,6 +187,9 @@ describe("buildMonitorStatus", () => {
         includesAlertPayloads: false,
         includesPrivatePaths: false,
         includesSecretValues: false,
+        includesCloudIdentifiers: false,
+        performsLiveAwsPolling: false,
+        performsCloudMutation: false,
         statusOutputIsMetadataOnly: true,
       },
     });
@@ -172,5 +202,9 @@ describe("buildMonitorStatus", () => {
     expect(serialized).not.toContain("raw service log");
     expect(serialized).not.toContain("raw-token");
     expect(serialized).not.toContain("postgres-private");
+    expect(serialized).not.toContain("rds-private.internal");
+    expect(serialized).not.toContain("private-monitor-bucket");
+    expect(serialized).not.toContain("private-cluster");
+    expect(serialized).not.toContain("private-service");
   });
 });

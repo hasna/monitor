@@ -1,6 +1,12 @@
 import type { MonitorConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import {
+  inspectCloudRuntimeHealth,
+  type CloudRuntimeDiagnosticSource,
+  type CloudRuntimeHealthReport,
+  type CloudRuntimeSummaryCounts,
+} from "./cloud-runtime.js";
+import {
   getAlertStats,
   listAgents,
   listCronJobs,
@@ -24,6 +30,7 @@ export interface MonitorStatusSnapshot {
   databaseReachable: boolean;
   servicesReachable: boolean;
   cloudDatabaseConfigured: boolean;
+  cloudRuntime?: CloudRuntimeHealthReport;
   packageVersion: string;
 }
 
@@ -41,6 +48,14 @@ export interface MonitorStatusContract {
     };
     config: {
       source: "default";
+    };
+    cloudRuntime: {
+      localStore: "sqlite";
+      localFiles: true;
+      remotePostgres: "configured" | "not_configured";
+      objectStore: "configured" | "not_configured";
+      awsPolling: "disabled_by_default" | "provider_observations";
+      cloudMutationAllowed: false;
     };
   };
   counts: {
@@ -71,6 +86,9 @@ export interface MonitorStatusContract {
       active: number;
       inactive: number;
     };
+    cloudRuntime: CloudRuntimeSummaryCounts & {
+      bySource: Record<CloudRuntimeDiagnosticSource, "ok" | "warn" | "critical" | "unknown">;
+    };
   };
   health: {
     status: ContractStatus;
@@ -79,6 +97,8 @@ export interface MonitorStatusContract {
     hasCriticalAlerts: boolean;
     hasFailedServices: boolean;
     hasOfflineMachines: boolean;
+    hasCloudRuntimeWarnings: boolean;
+    hasUnobservedConfiguredCloudRuntime: boolean;
   };
   safety: {
     includesLogs: false;
@@ -87,6 +107,9 @@ export interface MonitorStatusContract {
     includesAlertPayloads: false;
     includesPrivatePaths: false;
     includesSecretValues: false;
+    includesCloudIdentifiers: false;
+    performsLiveAwsPolling: false;
+    performsCloudMutation: false;
     statusOutputIsMetadataOnly: true;
   };
 }
@@ -158,6 +181,13 @@ function countServices(serviceResults: ServiceListResult[]): MonitorStatusContra
 }
 
 export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStatusContract {
+  const cloudRuntime = snapshot.cloudRuntime ?? inspectCloudRuntimeHealth({
+    config: snapshot.config,
+    env: {
+      MONITOR_DATABASE_URL: snapshot.cloudDatabaseConfigured ? "configured" : undefined,
+    },
+    packageVersion: snapshot.packageVersion,
+  });
   const machineTypes = emptyMachineTypes();
   for (const machine of snapshot.config.machines) {
     machineTypes[machine.type] += 1;
@@ -172,12 +202,18 @@ export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStat
   const hasFailedServices = services.failed > 0 || services.probeErrors > 0;
   const hasCriticalAlerts = snapshot.alertStats.critical > 0;
   const hasOfflineMachines = machineStatuses.offline > 0;
+  const hasCloudRuntimeWarnings = cloudRuntime.overallStatus === "warn" || cloudRuntime.overallStatus === "critical";
+  const hasUnobservedConfiguredCloudRuntime = cloudRuntime.diagnostics.some(
+    (item) => item.configured && !item.observed && item.status === "unknown"
+  );
   const status: ContractStatus =
     snapshot.databaseReachable &&
     snapshot.servicesReachable &&
     !hasCriticalAlerts &&
     !hasFailedServices &&
-    !hasOfflineMachines
+    !hasOfflineMachines &&
+    !hasCloudRuntimeWarnings &&
+    !hasUnobservedConfiguredCloudRuntime
       ? "ok"
       : "warn";
 
@@ -196,6 +232,14 @@ export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStat
       config: {
         source: "default",
       },
+      cloudRuntime: {
+        localStore: cloudRuntime.boundary.localStore,
+        localFiles: cloudRuntime.boundary.localFiles,
+        remotePostgres: cloudRuntime.boundary.remotePostgres,
+        objectStore: cloudRuntime.boundary.objectStore,
+        awsPolling: cloudRuntime.boundary.aws.livePolling,
+        cloudMutationAllowed: cloudRuntime.boundary.aws.mutationAllowed,
+      },
     },
     counts: {
       machines: {
@@ -209,6 +253,12 @@ export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStat
       cronJobs: countCronJobs(snapshot.cronJobs),
       integrations: countConfiguredIntegrations(snapshot.config),
       agents: countActiveAgents(snapshot.agents),
+      cloudRuntime: {
+        ...cloudRuntime.counts,
+        bySource: Object.fromEntries(
+          cloudRuntime.diagnostics.map((item) => [item.source, item.status])
+        ) as Record<CloudRuntimeDiagnosticSource, "ok" | "warn" | "critical" | "unknown">,
+      },
     },
     health: {
       status,
@@ -217,6 +267,8 @@ export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStat
       hasCriticalAlerts,
       hasFailedServices,
       hasOfflineMachines,
+      hasCloudRuntimeWarnings,
+      hasUnobservedConfiguredCloudRuntime,
     },
     safety: {
       includesLogs: false,
@@ -225,6 +277,9 @@ export function buildMonitorStatus(snapshot: MonitorStatusSnapshot): MonitorStat
       includesAlertPayloads: false,
       includesPrivatePaths: false,
       includesSecretValues: false,
+      includesCloudIdentifiers: false,
+      performsLiveAwsPolling: false,
+      performsCloudMutation: false,
       statusOutputIsMetadataOnly: true,
     },
   };
@@ -271,6 +326,11 @@ export async function getMonitorStatus(options: { probeServices?: boolean } = {}
     databaseReachable,
     servicesReachable: options.probeServices === true ? serviceResults.every((result) => result.ok) : true,
     cloudDatabaseConfigured: Boolean(process.env["MONITOR_DATABASE_URL"]),
+    cloudRuntime: inspectCloudRuntimeHealth({
+      config,
+      env: process.env,
+      packageVersion: MONITOR_VERSION,
+    }),
     packageVersion: MONITOR_VERSION,
   });
 }
