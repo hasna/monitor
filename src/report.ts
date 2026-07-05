@@ -1,6 +1,7 @@
 import { listKnownMachineIds } from "./collectors/index.js";
 import { inspectCloudRuntimeHealth, type CloudRuntimeHealthReport } from "./cloud-runtime.js";
-import { getLatestMetric, getMetricsHistory, listAlerts } from "./db/queries.js";
+import { loadConfig } from "./config.js";
+import { getLatestMetric, getMetricsHistory, listAlerts, listMachines } from "./db/queries.js";
 import type { AlertRow, ProcessRow } from "./db/schema.js";
 import { collectMachineDiagnostics } from "./runtime-health.js";
 
@@ -30,6 +31,8 @@ export interface FleetReportMachineSummary {
   machineId: string;
   hostname: string | null;
   status: "ok" | "warn" | "critical" | "error";
+  collectionSkipped?: boolean;
+  note?: string;
   cpuPercent: number | null;
   memPercent: number | null;
   processCount: number | null;
@@ -58,6 +61,8 @@ export interface FleetHealthReport {
 export interface BuildFleetHealthReportOptions {
   period?: ReportPeriod;
   machineIds?: string[];
+  machineTypes?: Record<string, "local" | "ssh" | "ec2">;
+  allowLiveCloudPolling?: boolean;
   now?: number;
   cloudRuntime?: CloudRuntimeHealthReport;
 }
@@ -106,6 +111,55 @@ function normalizeCloudStatus(status: CloudRuntimeHealthReport["overallStatus"])
   return "ok";
 }
 
+export function getReportMachineType(
+  machineId: string,
+  options: Pick<BuildFleetHealthReportOptions, "machineTypes"> = {}
+): "local" | "ssh" | "ec2" | null {
+  const explicitType = options.machineTypes?.[machineId];
+  if (explicitType) return explicitType;
+
+  try {
+    const machine = listMachines().find((entry) => entry.id === machineId);
+    if (machine) return machine.type;
+  } catch {
+    // Fall through to config lookup.
+  }
+
+  try {
+    const machine = loadConfig().machines.find((entry) => entry.id === machineId);
+    if (machine) return machine.type;
+  } catch {
+    // Unknown machine types are treated as non-cloud to preserve local/SSH behavior.
+  }
+
+  return null;
+}
+
+export function shouldSkipLiveCloudCollection(
+  machineId: string,
+  options: Pick<BuildFleetHealthReportOptions, "allowLiveCloudPolling" | "machineTypes"> = {}
+): boolean {
+  return options.allowLiveCloudPolling !== true && getReportMachineType(machineId, options) === "ec2";
+}
+
+function skippedCloudMachineSummary(machineId: string): FleetReportMachineSummary {
+  return {
+    machineId,
+    hostname: null,
+    status: "warn",
+    collectionSkipped: true,
+    note: "Skipped live EC2 collection because live cloud polling is disabled by default; enable only after explicit approval.",
+    cpuPercent: null,
+    memPercent: null,
+    processCount: null,
+    zombieCount: null,
+    recentAlerts: 0,
+    unresolvedAlerts: 0,
+    diskDeltaGb: null,
+    topProcesses: [],
+  };
+}
+
 function summariseTopProcesses(processRows: ProcessRow[]): FleetReportProcessSummary[] {
   return [...processRows]
     .sort((left, right) => {
@@ -143,6 +197,10 @@ export async function buildFleetHealthReport(
 
   const machines = await Promise.all(
     machineIds.map(async (machineId): Promise<FleetReportMachineSummary> => {
+      if (shouldSkipLiveCloudCollection(machineId, options)) {
+        return skippedCloudMachineSummary(machineId);
+      }
+
       const recentAlerts = getRecentAlerts(machineId, windowStart);
       const unresolvedAlerts = listAlerts(machineId, true);
       const metricsHistory = getMetricsHistory(machineId, windowStart);
@@ -198,7 +256,7 @@ export async function buildFleetHealthReport(
     overallStatus,
     cloudRuntime,
     machineCount: machines.length,
-    reachableMachineCount: machines.filter((machine) => machine.status !== "error").length,
+    reachableMachineCount: machines.filter((machine) => machine.status !== "error" && machine.collectionSkipped !== true).length,
     recentAlerts: machines.reduce((sum, machine) => sum + machine.recentAlerts, 0),
     unresolvedAlerts: machines.reduce((sum, machine) => sum + machine.unresolvedAlerts, 0),
     machines,
@@ -238,6 +296,10 @@ export function formatFleetHealthReportText(report: FleetHealthReport): string {
       lines.push(`  Error: ${machine.error}`);
     }
 
+    if (machine.note) {
+      lines.push(`  Note: ${machine.note}`);
+    }
+
     lines.push("");
   }
 
@@ -256,10 +318,13 @@ export function formatFleetHealthReportHtml(report: FleetHealthReport): string {
       const error = machine.error
         ? `<div style="color:#b91c1c;margin-top:8px">${escapeHtml(machine.error)}</div>`
         : "";
+      const note = machine.note
+        ? `<div style="color:#92400e;margin-top:8px">${escapeHtml(machine.note)}</div>`
+        : "";
 
       return [
         "<tr>",
-        `  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb"><strong>${escapeHtml(machine.machineId)}</strong><div style="color:#6b7280;font-size:12px">${escapeHtml(machine.hostname ?? "unreachable")}</div>${error}</td>`,
+        `  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb"><strong>${escapeHtml(machine.machineId)}</strong><div style="color:#6b7280;font-size:12px">${escapeHtml(machine.hostname ?? "unreachable")}</div>${error}${note}</td>`,
         `  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb">${escapeHtml(machine.status.toUpperCase())}</td>`,
         `  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb">${escapeHtml(formatPercent(machine.cpuPercent))}</td>`,
         `  <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb">${escapeHtml(formatPercent(machine.memPercent))}</td>`,

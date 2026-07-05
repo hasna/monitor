@@ -1365,6 +1365,7 @@ program
   .option("-p, --period <period>", "Report window: daily|weekly", parseReportPeriod, "daily")
   .option("-s, --send", "Send the report via configured conversations/emails integrations")
   .option("--schedule <period>", "Create or update a scheduled report job", parseReportPeriod)
+  .option("--allow-live-cloud-polling", "Include EC2/cloud machines in live report collection after explicit approval", false)
   .option("-j, --json", "Output raw JSON")
   .action(async (opts) => {
     const scheduledPeriod = opts.schedule as ReportPeriod | undefined;
@@ -1411,7 +1412,10 @@ program
     }
 
     const period = opts.period as ReportPeriod;
-    const report = await buildFleetHealthReport({ period });
+    const report = await buildFleetHealthReport({
+      period,
+      allowLiveCloudPolling: opts.allowLiveCloudPolling === true,
+    });
 
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
