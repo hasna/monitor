@@ -35,6 +35,35 @@ Or with npm:
 npm install -g @hasna/monitor
 ```
 
+## Published entrypoints
+
+After a global install, `@hasna/monitor` exposes four npm binaries:
+
+| Binary | Description |
+|--------|-------------|
+| `monitor` | Main CLI for machines, metrics, doctor, cron, and integrations |
+| `monitor-mcp` | MCP server for AI agents (stdio or HTTP) |
+| `monitor-server` | Standalone REST API server (default port `3847`, SSE at `/api/stream`) |
+| `monitor-web` | Standalone Vite web dashboard dev server (default port `3848`) |
+
+Start the API and dashboard separately:
+
+```bash
+monitor-server
+# REST API: http://localhost:3847
+
+monitor-web
+# Dashboard: http://localhost:3848
+```
+
+Or start the API through the main CLI:
+
+```bash
+monitor serve --port 3847
+```
+
+Override standalone bin ports with `PORT`, for example `PORT=9000 monitor-web`.
+
 ## Quick Start
 
 ```bash
@@ -57,7 +86,7 @@ monitor ps --filter zombies
 monitor search "high cpu"
 
 # Start the web dashboard
-monitor serve --web
+monitor-web
 ```
 
 ## MCP Setup
@@ -153,7 +182,6 @@ monitor <command> [options]
 | `integrations list` | List integration status |
 | `integrations test <name>` | Test an integration |
 | `serve` | Start the API server |
-| `serve --web` | Start the API + web dashboard |
 | `mcp` | Start the MCP server (stdio) |
 | `sync push` | Push metrics to remote store |
 | `sync pull` | Pull metrics from remote store |
@@ -321,7 +349,7 @@ values are intentionally excluded.
 ## Web Dashboard
 
 ```bash
-monitor serve --web
+monitor-web
 # Opens: http://localhost:3848
 ```
 
@@ -332,7 +360,7 @@ The dashboard shows:
 - Doctor check results
 - Cron job schedule
 
-Default port is `3848`. Override in config: `"webPort": 9000`.
+Default port is `3848`. Override it with `PORT=9000 monitor-web`.
 
 ## Configuration
 
