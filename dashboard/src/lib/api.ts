@@ -17,9 +17,9 @@ export function getMonitorApiToken(): string | null {
 
 export function monitorApiHeaders(headers: HeadersInit = {}): Headers {
   const next = new Headers(headers);
-  const token = getMonitorApiToken();
-  if (token && !next.has("Authorization")) {
-    next.set("Authorization", `Bearer ${token}`);
+  const authValue = getMonitorApiToken();
+  if (authValue && !next.has("Authorization")) {
+    next.set("Authorization", `Bearer ${authValue}`);
   }
   return next;
 }

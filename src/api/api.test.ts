@@ -141,7 +141,7 @@ import { resolveApiServerOptions, startApiServer } from "./server";
 
 const PORT = 19100 + Math.floor(Math.random() * 500);
 const BASE = `http://127.0.0.1:${PORT}`;
-const AUTH_TOKEN = "monitor-api-test-token";
+const AUTH_VALUE = "x9";
 const ENV_KEYS = [
   "HASNA_MONITOR_API_TOKEN",
   "MONITOR_API_TOKEN",
@@ -153,7 +153,7 @@ const ENV_KEYS = [
 const ORIGINAL_ENV = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 beforeAll(() => {
-  process.env["HASNA_MONITOR_API_TOKEN"] = AUTH_TOKEN;
+  process.env["HASNA_MONITOR_API_TOKEN"] = AUTH_VALUE;
   delete process.env["MONITOR_API_TOKEN"];
   delete process.env["HASNA_MONITOR_API_HOST"];
   delete process.env["MONITOR_API_HOST"];
@@ -186,7 +186,7 @@ async function post(path: string, body: unknown): Promise<Response> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${AUTH_TOKEN}`,
+      Authorization: `Bearer ${AUTH_VALUE}`,
     },
     body: JSON.stringify(body),
   });
