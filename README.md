@@ -521,6 +521,9 @@ monitor migrate
 
 ## Security
 
+- The REST API binds to `127.0.0.1` by default. Use `monitor serve --host 0.0.0.0` or `HASNA_MONITOR_API_HOST=0.0.0.0` only behind a trusted network or reverse proxy.
+- Mutating and diagnostic command REST routes require `Authorization: Bearer <token>` or `X-API-Key: <token>`. Set `HASNA_MONITOR_API_TOKEN` or `MONITOR_API_TOKEN` before using API routes that create/delete machines, run doctor diagnostics, kill processes, create cron jobs, or run cron jobs. The dashboard sends `VITE_MONITOR_API_TOKEN` or a browser `localStorage` value named `monitor.apiToken` when present.
+- CORS is restricted to exact trusted origins. Local dashboard origins are allowed by default; add comma-separated origins with `HASNA_MONITOR_API_CORS_ORIGINS` or `MONITOR_API_CORS_ORIGINS`.
 - Process command lines are automatically redacted before being returned to AI agents — passwords, tokens, API keys, and secrets are replaced with `***`
 - See [SECURITY.md](SECURITY.md) for the security policy and responsible disclosure process
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { monitorApiFetch } from "@/lib/api";
 
 export interface CpuStats {
   brand: string;
@@ -110,7 +111,7 @@ export function useSnapshot(machineId: string, pollInterval = 10_000) {
     const signal = abortRef.current.signal;
 
     try {
-      const res = await fetch(`${API_BASE}/machines/${machineId}/snapshot`, { signal });
+      const res = await monitorApiFetch(`${API_BASE}/machines/${machineId}/snapshot`, { signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as SystemSnapshot;
       setSnapshot(data);
@@ -145,7 +146,7 @@ export function useAlerts(machineId: string, pollInterval = 30_000) {
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/machines/${machineId}/alerts`);
+      const res = await monitorApiFetch(`${API_BASE}/machines/${machineId}/alerts`);
       if (res.ok) {
         const data = await res.json() as Alert[];
         setAlerts(data);
@@ -177,7 +178,7 @@ export function useDoctor(machineId: string) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/machines/${machineId}/doctor`, {
+      const res = await monitorApiFetch(`${API_BASE}/machines/${machineId}/doctor`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -201,7 +202,7 @@ export function useMachines(pollInterval = 30_000) {
 
   const fetchMachines = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/machines`);
+      const res = await monitorApiFetch(`${API_BASE}/machines`);
       if (res.ok) {
         const data = await res.json() as Array<{ id: string; label: string; type: string; status?: string }>;
         setMachines(data);

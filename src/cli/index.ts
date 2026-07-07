@@ -1753,10 +1753,11 @@ program
   .command("serve")
   .description("Start the REST API server")
   .option("-p, --port <port>", "API port", "3847")
+  .option("-H, --host <host>", "API host/interface (default: 127.0.0.1)")
   .action(async (opts) => {
     const { startApiServer } = await import("../api/server.js");
     const port = parseInt(opts.port, 10);
-    startApiServer({ port });
+    startApiServer({ port, hostname: opts.host });
   });
 
 // ── monitor mcp ───────────────────────────────────────────────────────────────
