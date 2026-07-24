@@ -115,9 +115,6 @@ _monitor() {
       COMPREPLY=($(compgen -W "-a --all -l --logs -t --tail -n --limit --cursor -v --verbose -j --json" -- "$cur"))
       return
       ;;
-    machines)
-      COMPREPLY=($(compgen -W "-n --limit --cursor -v --verbose -j --json" -- "$cur"))
-      ;;
 
     ps)
       local opts="-n --limit --cursor -v --verbose -s --sort -f --filter -j --json"
