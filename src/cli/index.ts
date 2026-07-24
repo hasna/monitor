@@ -54,6 +54,25 @@ import {
 import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
 import { getMonitorStatus } from "../status.js";
+import {
+  DEFAULT_LIST_LIMIT,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_LIST_LIMIT,
+  compactHint,
+  pageItems,
+  parseBoundedInt,
+  truncateText,
+  type Page,
+} from "../output.js";
+
+type MachineListItem = {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  last_seen: number | null;
+  host?: string | null;
+};
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
@@ -196,9 +215,35 @@ function exitOnQuarantineRetentionFailure(result: MonitorLoopCheckResult): void 
   process.exit(1);
 }
 
+function parseLimitOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "limit", 1, MAX_LIST_LIMIT);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function parseCursorOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "cursor", 0, Number.MAX_SAFE_INTEGER);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function printPageHint<T>(
+  page: Page<T>,
+  detailHint: string,
+  indent = "  "
+): void {
+  if (page.hidden > 0) {
+    console.log(chalk.dim(`${indent}${compactHint(page, detailHint)}`));
+  }
+}
+
 async function renderInstalledApps(
   machineArg: string | undefined,
-  opts: { all?: boolean; compare?: boolean; json?: boolean },
+  opts: { all?: boolean; compare?: boolean; json?: boolean; limit?: number; cursor?: number; verbose?: boolean },
   forceCompare = false
 ) {
   const shouldCompare = Boolean(opts.compare || forceCompare);
@@ -229,7 +274,13 @@ async function renderInstalledApps(
       return;
     }
 
-    for (const entry of comparison) {
+    const comparisonPage = pageItems(comparison, {
+      limit: opts.limit,
+      cursor: opts.cursor,
+      defaultLimit: DEFAULT_LIST_LIMIT,
+    });
+
+    for (const entry of comparisonPage.items) {
       const issueBits = [
         entry.missingOn.length > 0 ? `missing on ${entry.missingOn.join(", ")}` : null,
         new Set(Object.values(entry.versionsByMachine).filter(Boolean)).size > 1
@@ -241,9 +292,10 @@ async function renderInstalledApps(
       ].filter(Boolean);
 
       console.log(
-        `  ${entry.manager}/${entry.kind} ${entry.name} ${chalk.dim(`(${issueBits.join(" | ")})`)}`
+        `  ${entry.manager}/${entry.kind} ${truncateText(entry.name, 48)} ${chalk.dim(`(${truncateText(issueBits.join(" | "), opts.verbose ? 180 : 100)})`)}`
       );
     }
+    printPageHint(comparisonPage, "Use --limit, --cursor, --verbose, or --json for more comparison detail.");
     console.log();
     return;
   }
@@ -267,11 +319,18 @@ async function renderInstalledApps(
         `    ${"NAME".padEnd(28)} ${"MANAGER".padEnd(10)} ${"KIND".padEnd(9)} ${"VERSION".padEnd(18)} ${"OWNER".padEnd(10)} ROOT`
       )
     );
-    for (const app of result.apps) {
+    const appsPage = pageItems(result.apps, {
+      limit: opts.limit,
+      cursor: opts.cursor,
+      defaultLimit: DEFAULT_LIST_LIMIT,
+    });
+
+    for (const app of appsPage.items) {
       console.log(
-        `    ${app.name.slice(0, 28).padEnd(28)} ${app.manager.padEnd(10)} ${app.kind.padEnd(9)} ${(app.version ?? "-").slice(0, 18).padEnd(18)} ${(app.owner ?? "-").slice(0, 10).padEnd(10)} ${app.rootOwned ? "yes" : "no"}`
+        `    ${truncateText(app.name, opts.verbose ? 48 : 28).padEnd(28)} ${app.manager.padEnd(10)} ${app.kind.padEnd(9)} ${truncateText(app.version ?? "-", opts.verbose ? 40 : 18).padEnd(18)} ${truncateText(app.owner ?? "-", 10).padEnd(10)} ${app.rootOwned ? "yes" : "no"}`
       );
     }
+    printPageHint(appsPage, "Use --limit, --cursor, --verbose, or --json for more app detail.", "    ");
     console.log();
   }
 }
@@ -382,9 +441,12 @@ program
 program
   .command("machines")
   .description("List all configured machines")
+  .option("-n, --limit <n>", "Number of machines to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Include host/detail columns")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
-    let machines;
+    let machines: MachineListItem[];
     try {
       machines = listMachines();
     } catch {
@@ -405,14 +467,18 @@ program
     }
 
     console.log();
-    console.log(chalk.bold(`  ${"ID".padEnd(20)} ${"NAME".padEnd(24)} ${"TYPE".padEnd(8)} ${"STATUS".padEnd(10)} LAST SEEN`));
+    const page = pageItems(machines, { limit: opts.limit, cursor: opts.cursor });
+    const extraHeader = opts.verbose ? ` ${"HOST".padEnd(22)}` : "";
+    console.log(chalk.bold(`  ${"ID".padEnd(20)} ${"NAME".padEnd(24)} ${"TYPE".padEnd(8)} ${"STATUS".padEnd(10)} LAST SEEN${extraHeader}`));
     console.log("  " + chalk.dim("-".repeat(80)));
-    for (const m of machines) {
+    for (const m of page.items) {
       const lastSeen = "last_seen" in m ? formatTs(m.last_seen) : chalk.dim("—");
       const type = "type" in m ? m.type : "?";
       const status = "status" in m ? statusColor(m.status) : chalk.dim("—");
-      console.log(`  ${m.id.padEnd(20)} ${m.name.padEnd(24)} ${type.padEnd(8)} ${status.padEnd(18)} ${lastSeen}`);
+      const extra = opts.verbose && "host" in m ? ` ${truncateText(m.host ?? "-", 22).padEnd(22)}` : "";
+      console.log(`  ${truncateText(m.id, 20).padEnd(20)} ${truncateText(m.name, 24).padEnd(24)} ${type.padEnd(8)} ${status.padEnd(18)} ${lastSeen}${extra}`);
     }
+    printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more machine detail.");
     console.log();
   });
 
@@ -455,6 +521,9 @@ program
 program
   .command("doctor [machine]")
   .description("Run health checks and show colored report")
+  .option("-n, --limit <n>", "Number of detail rows to show in each section", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for detail sections", parseCursorOption, 0)
+  .option("-v, --verbose", "Show full diagnostic messages and detail rows")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
@@ -490,41 +559,59 @@ program
     for (const check of report.checks) {
       const icon = check.status === "ok" ? chalk.green("✓") : check.status === "warn" ? chalk.yellow("⚠") : chalk.red("✗");
       const name = check.name.padEnd(20);
-      const msg = check.status === "ok" ? chalk.dim(check.message) : check.message;
+      const message = opts.verbose ? check.message : truncateText(check.message, 110);
+      const msg = check.status === "ok" ? chalk.dim(message) : message;
       console.log(`  ${icon} ${name} ${msg}`);
     }
 
     if (diagnostics.runtimeHealth.mcp.servers.length > 0) {
       console.log();
       console.log(chalk.bold("  Claude MCP Servers:"));
-      for (const server of diagnostics.runtimeHealth.mcp.servers) {
+      const serversPage = pageItems(diagnostics.runtimeHealth.mcp.servers, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+      });
+      for (const server of serversPage.items) {
         const icon =
           server.status === "connected"
             ? chalk.green("✓")
             : server.status === "failed"
             ? chalk.red("✗")
             : chalk.yellow("?");
-        const status = server.status === "connected" ? chalk.dim(server.rawStatus) : server.rawStatus;
-        console.log(`  ${icon} ${server.name.padEnd(20)} ${status}`);
+        const rawStatus = opts.verbose ? server.rawStatus : truncateText(server.rawStatus, 80);
+        const status = server.status === "connected" ? chalk.dim(rawStatus) : rawStatus;
+        console.log(`  ${icon} ${truncateText(server.name, 20).padEnd(20)} ${status}`);
       }
+      printPageHint(serversPage, "Use --limit, --cursor, --verbose, or --json for more MCP server detail.");
     }
 
     if (diagnostics.runtimeHealth.tmux.deadCount > 0) {
       console.log();
       console.log(chalk.bold("  Dead tmux panes:"));
-      for (const pane of diagnostics.runtimeHealth.tmux.deadPanes) {
+      const panesPage = pageItems(diagnostics.runtimeHealth.tmux.deadPanes, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+      });
+      for (const pane of panesPage.items) {
         const exitStatus = pane.deadStatus === null ? chalk.dim("unknown") : String(pane.deadStatus);
         const command = pane.startCommand || pane.currentCommand || "(no command recorded)";
-        console.log(`  ${chalk.red("✗")} ${pane.ref.padEnd(20)} exit ${exitStatus}  ${command}`);
+        console.log(`  ${chalk.red("✗")} ${truncateText(pane.ref, 20).padEnd(20)} exit ${exitStatus}  ${truncateText(command, opts.verbose ? 180 : 90)}`);
       }
+      printPageHint(panesPage, "Use --limit, --cursor, --verbose, or --json for more dead pane detail.");
     }
 
     if (report.recommendedActions.length > 0) {
       console.log();
       console.log(chalk.bold("  Recommended Actions:"));
-      for (const action of report.recommendedActions) {
-        console.log(`  ${chalk.yellow("→")} ${action}`);
+      const actionsPage = pageItems(report.recommendedActions, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+        defaultLimit: Math.min(DEFAULT_LIST_LIMIT, 10),
+      });
+      for (const action of actionsPage.items) {
+        console.log(`  ${chalk.yellow("→")} ${truncateText(action, opts.verbose ? 220 : 110)}`);
       }
+      printPageHint(actionsPage, "Use --limit, --cursor, --verbose, or --json for more recommended actions.");
     }
     console.log();
   });
@@ -534,9 +621,11 @@ program
 program
   .command("ps [machine]")
   .description("Show process table")
-  .option("-n, --limit <n>", "Number of processes to show", "20")
+  .option("-n, --limit <n>", "Number of processes to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
   .option("-s, --sort <by>", "Sort by: cpu | mem", "cpu")
   .option("-f, --filter <f>", "Filter: all | zombies | orphans | high_mem", "all")
+  .option("-v, --verbose", "Include truncated command lines")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
@@ -574,8 +663,8 @@ program
         : (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0)
     );
 
-    const limit = parseInt(opts.limit, 10);
-    rows = rows.slice(0, limit);
+    const page = pageItems(rows, { limit: opts.limit, cursor: opts.cursor });
+    rows = page.items;
 
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2));
@@ -589,7 +678,7 @@ program
     );
     console.log();
 
-    const header = `  ${"PID".padEnd(8)} ${"CPU%".padEnd(8)} ${"MEM MB".padEnd(10)} ${"STATUS".padEnd(10)} ${"FLAGS".padEnd(8)} NAME`;
+    const header = `  ${"PID".padEnd(8)} ${"CPU%".padEnd(8)} ${"MEM MB".padEnd(10)} ${"STATUS".padEnd(10)} ${"FLAGS".padEnd(8)} NAME${opts.verbose ? " / CMD" : ""}`;
     console.log(chalk.bold(header));
     console.log("  " + chalk.dim("-".repeat(70)));
 
@@ -602,7 +691,9 @@ program
       const memStr = (p.mem_mb ?? 0).toFixed(1).padEnd(10);
       const status = (p.status ?? "?").padEnd(10);
       const flagStr = (flags.join(",") || chalk.dim("—")).padEnd(8);
-      const name = p.name;
+      const name = opts.verbose && p.cmd
+        ? `${truncateText(p.name, 28)} ${chalk.dim(truncateText(p.cmd, 80))}`
+        : truncateText(p.name, 60);
 
       const line = `  ${String(p.pid).padEnd(8)} ${cpuStr} ${memStr} ${status} ${flagStr} ${name}`;
       if (p.is_zombie) {
@@ -613,6 +704,7 @@ program
         console.log(line);
       }
     }
+    printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more process detail.");
     console.log();
   });
 
@@ -622,6 +714,9 @@ program
   .command("mcp-health [machine]")
   .description("Inspect Claude MCP server status and dead tmux panes")
   .option("-a, --all", "Inspect all configured machines")
+  .option("-n, --limit <n>", "Number of MCP servers/dead panes to show per machine", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for detail sections", parseCursorOption, 0)
+  .option("-v, --verbose", "Show full MCP raw statuses and pane commands")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineIds = opts.all ? listKnownMachineIds() : [machineArg ?? "local"];
@@ -657,24 +752,36 @@ program
       );
 
       if (runtimeHealth.mcp.servers.length > 0) {
-        for (const server of runtimeHealth.mcp.servers) {
+        const serversPage = pageItems(runtimeHealth.mcp.servers, {
+          limit: opts.limit,
+          cursor: opts.cursor,
+        });
+        for (const server of serversPage.items) {
           const icon =
             server.status === "connected"
               ? chalk.green("✓")
               : server.status === "failed"
               ? chalk.red("✗")
               : chalk.yellow("?");
-          console.log(`    ${icon} ${server.name.padEnd(20)} ${server.rawStatus}`);
+          console.log(`    ${icon} ${truncateText(server.name, 20).padEnd(20)} ${truncateText(server.rawStatus, opts.verbose ? 160 : 80)}`);
         }
+        printPageHint(serversPage, "Use --limit, --cursor, --verbose, or --json for more MCP server detail.", "    ");
       } else {
         console.log(chalk.dim("    No Claude MCP servers configured"));
       }
 
       if (runtimeHealth.tmux.deadCount > 0) {
-        for (const pane of runtimeHealth.tmux.deadPanes) {
+        const panesPage = pageItems(runtimeHealth.tmux.deadPanes, {
+          limit: opts.limit,
+          cursor: opts.cursor,
+        });
+        for (const pane of panesPage.items) {
           const exitStatus = pane.deadStatus === null ? "unknown" : String(pane.deadStatus);
-          console.log(`    ${chalk.red("✗")} dead tmux pane ${pane.ref} (exit ${exitStatus})`);
+          const command = pane.startCommand || pane.currentCommand || "";
+          const suffix = opts.verbose && command ? ` ${chalk.dim(truncateText(command, 120))}` : "";
+          console.log(`    ${chalk.red("✗")} dead tmux pane ${truncateText(pane.ref, 40)} (exit ${exitStatus})${suffix}`);
         }
+        printPageHint(panesPage, "Use --limit, --cursor, --verbose, or --json for more dead pane detail.", "    ");
       }
 
       console.log();
@@ -687,6 +794,9 @@ program
   .command("mcp-status [machine]")
   .description("Show MCP server health with matched process PIDs, memory, and uptime")
   .option("-a, --all", "Inspect all configured machines")
+  .option("-n, --limit <n>", "Number of MCP servers to show per machine", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show full server names/status strings")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
@@ -715,11 +825,16 @@ program
 
       console.log(chalk.dim(`    checked: ${result.checkedAt}`));
       console.log(chalk.dim(`    ${"NAME".padEnd(18)} ${"STATUS".padEnd(10)} ${"PIDS".padEnd(16)} ${"MEM".padEnd(10)} UPTIME`));
-      for (const server of result.servers) {
+      const serversPage = pageItems(result.servers, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+      });
+      for (const server of serversPage.items) {
         console.log(
-          `    ${server.name.padEnd(18)} ${server.status.padEnd(10)} ${(server.pids.join(",") || "-").padEnd(16)} ${`${server.memoryMb.toFixed(1)}MB`.padEnd(10)} ${server.uptimeSeconds === null ? "-" : `${Math.round(server.uptimeSeconds)}s`}`
+          `    ${truncateText(server.name, opts.verbose ? 36 : 18).padEnd(18)} ${server.status.padEnd(10)} ${(server.pids.join(",") || "-").padEnd(16)} ${`${server.memoryMb.toFixed(1)}MB`.padEnd(10)} ${server.uptimeSeconds === null ? "-" : `${Math.round(server.uptimeSeconds)}s`}`
         );
       }
+      printPageHint(serversPage, "Use --limit, --cursor, --verbose, or --json for more MCP status detail.", "    ");
       console.log();
     }
   });
@@ -869,6 +984,9 @@ program
   .command("alerts [machine]")
   .description("List alerts for a machine")
   .option("-a, --all", "Show all alerts including resolved ones")
+  .option("-n, --limit <n>", "Number of alerts to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show full alert messages and timestamps")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg;
@@ -901,12 +1019,15 @@ program
     if (alerts.length === 0) {
       console.log(chalk.green("  No alerts" + (unresolvedOnly ? " (unresolved)" : "") + "."));
     } else {
-      console.log(chalk.bold(`  ${"ID".padEnd(6)} ${"MACHINE".padEnd(16)} ${"SEVERITY".padEnd(12)} ${"CHECK".padEnd(20)} MESSAGE`));
+      const page = pageItems(alerts, { limit: opts.limit, cursor: opts.cursor });
+      console.log(chalk.bold(`  ${"ID".padEnd(6)} ${"MACHINE".padEnd(16)} ${"SEVERITY".padEnd(12)} ${"CHECK".padEnd(20)} MESSAGE${opts.verbose ? " / TIME" : ""}`));
       console.log("  " + chalk.dim("-".repeat(80)));
-      for (const a of alerts) {
+      for (const a of page.items) {
         const sev = severityColor(a.severity).padEnd(20);
-        console.log(`  ${String(a.id).padEnd(6)} ${a.machine_id.padEnd(16)} ${sev} ${a.check_name.padEnd(20)} ${a.message}`);
+        const time = opts.verbose ? chalk.dim(` ${formatTs(a.triggered_at)}`) : "";
+        console.log(`  ${String(a.id).padEnd(6)} ${truncateText(a.machine_id, 16).padEnd(16)} ${sev} ${truncateText(a.check_name, 20).padEnd(20)} ${truncateText(a.message, opts.verbose ? 220 : 100)}${time}`);
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more alert detail.");
     }
     console.log();
   });
@@ -918,6 +1039,9 @@ program
   .description("Show installed apps/packages or compare them across machines")
   .option("-a, --all", "Inspect all configured machines")
   .option("-c, --compare", "Compare installed apps across machines")
+  .option("-n, --limit <n>", "Number of apps/comparison rows to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show wider app and version columns")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     await renderInstalledApps(machineArg, opts);
@@ -926,6 +1050,9 @@ program
 program
   .command("compare-apps")
   .description("Compare installed apps across all configured machines")
+  .option("-n, --limit <n>", "Number of comparison rows to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show wider comparison detail")
   .option("-j, --json", "Output raw JSON")
   .action(async (opts) => {
     await renderInstalledApps(undefined, opts, true);
@@ -935,6 +1062,9 @@ program
   .command("service <action> [name]")
   .description("List or control system services and detected dev servers")
   .option("-m, --machine <id>", "Machine ID", "local")
+  .option("-n, --limit <n>", "Number of services to show for list", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show service detail strings")
   .option("-j, --json", "Output raw JSON")
   .action(async (action: string, name: string | undefined, opts) => {
     const machineId = opts.machine ?? "local";
@@ -965,12 +1095,15 @@ program
         return;
       }
 
-      console.log(chalk.dim(`    ${"NAME".padEnd(28)} ${"MANAGER".padEnd(12)} ${"STATUS".padEnd(10)} ${"PIDS".padEnd(16)} PORTS`));
-      for (const service of result.services) {
+      const page = pageItems(result.services, { limit: opts.limit, cursor: opts.cursor });
+      console.log(chalk.dim(`    ${"NAME".padEnd(28)} ${"MANAGER".padEnd(12)} ${"STATUS".padEnd(10)} ${"PIDS".padEnd(16)} PORTS${opts.verbose ? " / DETAIL" : ""}`));
+      for (const service of page.items) {
+        const detail = opts.verbose && service.detail ? ` ${chalk.dim(truncateText(service.detail, 80))}` : "";
         console.log(
-          `    ${service.name.slice(0, 28).padEnd(28)} ${service.manager.padEnd(12)} ${service.status.padEnd(10)} ${(service.pids.join(",") || "-").padEnd(16)} ${service.ports.join(",") || "-"}`
+          `    ${truncateText(service.name, 28).padEnd(28)} ${service.manager.padEnd(12)} ${service.status.padEnd(10)} ${(service.pids.join(",") || "-").padEnd(16)} ${truncateText(service.ports.join(",") || "-", 48)}${detail}`
         );
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more service detail.", "    ");
       console.log();
       return;
     }
@@ -980,7 +1113,7 @@ program
       process.exit(1);
     }
 
-    const result = await manageService(action as "start" | "stop" | "restart", name, machineId);
+    const result = await manageService(action as "start" | "stop" | "restart", name!, machineId);
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exit(1);
@@ -1010,6 +1143,9 @@ program
   .command("temperature [machine]")
   .description("Show CPU/GPU temperatures, fan speeds, and thermal alerts")
   .option("-a, --all", "Inspect all configured machines")
+  .option("-n, --limit <n>", "Number of readings/alerts to show per section", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for detail sections", parseCursorOption, 0)
+  .option("-v, --verbose", "Show wider reading labels and alert text")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
@@ -1040,30 +1176,38 @@ program
 
       if (result.cpu.length > 0) {
         console.log(chalk.dim("    CPU"));
-        for (const reading of result.cpu) {
-          console.log(`      ${reading.label}: ${reading.temperatureC.toFixed(1)}C`);
+        const page = pageItems(result.cpu, { limit: opts.limit, cursor: opts.cursor });
+        for (const reading of page.items) {
+          console.log(`      ${truncateText(reading.label, opts.verbose ? 60 : 34)}: ${reading.temperatureC.toFixed(1)}C`);
         }
+        printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more CPU readings.", "      ");
       }
 
       if (result.gpu.length > 0) {
         console.log(chalk.dim("    GPU"));
-        for (const reading of result.gpu) {
-          console.log(`      ${reading.label}: ${reading.temperatureC.toFixed(1)}C`);
+        const page = pageItems(result.gpu, { limit: opts.limit, cursor: opts.cursor });
+        for (const reading of page.items) {
+          console.log(`      ${truncateText(reading.label, opts.verbose ? 60 : 34)}: ${reading.temperatureC.toFixed(1)}C`);
         }
+        printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more GPU readings.", "      ");
       }
 
       if (result.fans.length > 0) {
         console.log(chalk.dim("    Fans"));
-        for (const fan of result.fans) {
-          console.log(`      ${fan.label}: ${fan.rpm === null ? "-" : `${Math.round(fan.rpm)} rpm`}`);
+        const page = pageItems(result.fans, { limit: opts.limit, cursor: opts.cursor });
+        for (const fan of page.items) {
+          console.log(`      ${truncateText(fan.label, opts.verbose ? 60 : 34)}: ${fan.rpm === null ? "-" : `${Math.round(fan.rpm)} rpm`}`);
         }
+        printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more fan readings.", "      ");
       }
 
       if (result.alerts.length > 0) {
         console.log(chalk.yellow("    Alerts"));
-        for (const alert of result.alerts) {
-          console.log(chalk.yellow(`      ${alert}`));
+        const page = pageItems(result.alerts, { limit: opts.limit, cursor: opts.cursor });
+        for (const alert of page.items) {
+          console.log(chalk.yellow(`      ${truncateText(alert, opts.verbose ? 180 : 90)}`));
         }
+        printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more thermal alerts.", "      ");
       }
 
       console.log();
@@ -1077,6 +1221,9 @@ program
   .description("Show listening TCP/UDP ports on one machine or across all machines")
   .option("-a, --all", "Scan all configured machines")
   .option("-p, --protocol <protocol>", "Filter by protocol: tcp|udp")
+  .option("-n, --limit <n>", "Number of ports to show per machine", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show wider host/process columns")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const protocol = opts.protocol as string | undefined;
@@ -1114,12 +1261,14 @@ program
         continue;
       }
 
+      const page = pageItems(result.ports, { limit: opts.limit, cursor: opts.cursor });
       console.log(chalk.dim(`    ${"PORT".padEnd(8)} ${"PROTO".padEnd(6)} ${"HOST".padEnd(24)} ${"PID".padEnd(8)} PROCESS`));
-      for (const port of result.ports) {
+      for (const port of page.items) {
         console.log(
-          `    ${String(port.port).padEnd(8)} ${port.protocol.padEnd(6)} ${port.host.padEnd(24)} ${String(port.pid ?? "-").padEnd(8)} ${port.process ?? "-"}`
+          `    ${String(port.port).padEnd(8)} ${port.protocol.padEnd(6)} ${truncateText(port.host, opts.verbose ? 48 : 24).padEnd(24)} ${String(port.pid ?? "-").padEnd(8)} ${truncateText(port.process ?? "-", opts.verbose ? 80 : 48)}`
         );
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more port detail.", "    ");
       console.log();
     }
   });
@@ -1225,6 +1374,9 @@ program
   .command("tailscale [machine]")
   .description("Show Tailscale peer status, IPs, health, and peer latency")
   .option("-a, --all", "Inspect all configured machines")
+  .option("-n, --limit <n>", "Number of peers to show per machine", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show peer IPs and full health text")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
@@ -1260,9 +1412,11 @@ program
       }
 
       if (result.health.length > 0) {
-        for (const message of result.health) {
-          console.log(chalk.yellow(`    health: ${message}`));
+        const healthPage = pageItems(result.health, { limit: opts.limit, cursor: opts.cursor });
+        for (const message of healthPage.items) {
+          console.log(chalk.yellow(`    health: ${truncateText(message, opts.verbose ? 180 : 90)}`));
         }
+        printPageHint(healthPage, "Use --limit, --cursor, --verbose, or --json for more health messages.", "    ");
       }
 
       if (result.peers.length === 0) {
@@ -1273,14 +1427,16 @@ program
 
       console.log(
         chalk.dim(
-          `    ${"HOST".padEnd(16)} ${"OS".padEnd(8)} ${"ONLINE".padEnd(8)} ${"LATENCY".padEnd(10)} ${"ROUTE".padEnd(20)} IPS`
+          `    ${"HOST".padEnd(16)} ${"OS".padEnd(8)} ${"ONLINE".padEnd(8)} ${"LATENCY".padEnd(10)} ${"ROUTE".padEnd(20)}${opts.verbose ? " IPS" : ""}`
         )
       );
-      for (const peer of result.peers) {
+      const peersPage = pageItems(result.peers, { limit: opts.limit, cursor: opts.cursor });
+      for (const peer of peersPage.items) {
         console.log(
-          `    ${peer.hostname.padEnd(16)} ${(peer.os ?? "-").padEnd(8)} ${String(peer.online).padEnd(8)} ${((peer.latencyMs === null ? "-" : `${peer.latencyMs.toFixed(0)}ms`)).padEnd(10)} ${(peer.latencyRoute ?? "-").slice(0, 20).padEnd(20)} ${peer.tailscaleIps.join(", ") || "-"}`
+          `    ${truncateText(peer.hostname, 16).padEnd(16)} ${truncateText(peer.os ?? "-", 8).padEnd(8)} ${String(peer.online).padEnd(8)} ${((peer.latencyMs === null ? "-" : `${peer.latencyMs.toFixed(0)}ms`)).padEnd(10)} ${truncateText(peer.latencyRoute ?? "-", 20).padEnd(20)}${opts.verbose ? ` ${truncateText(peer.tailscaleIps.join(", ") || "-", 80)}` : ""}`
         );
       }
+      printPageHint(peersPage, "Use --limit, --cursor, --verbose, or --json for peer IPs/details.", "    ");
       console.log();
     }
   });
@@ -1293,10 +1449,15 @@ program
   .option("-a, --all", "Inspect all configured machines")
   .option("-l, --logs <container>", "Fetch logs for a specific container")
   .option("-t, --tail <lines>", "Number of log lines to fetch", "100")
+  .option("-n, --limit <n>", "Number of containers or log lines to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show wider image/status/ports columns")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const tail = Number.parseInt(opts.tail, 10);
-    if (!Number.isFinite(tail) || tail < 1) {
+    let tail: number;
+    try {
+      tail = parseBoundedInt(opts.tail, "tail", 1, 10_000);
+    } catch {
       console.error(chalk.red("  tail must be a positive integer"));
       process.exit(1);
     }
@@ -1316,7 +1477,26 @@ program
         console.error(chalk.red(`  ${result.error ?? "Unable to fetch logs"}`));
         process.exit(1);
       }
-      console.log(result.logs || chalk.dim("  (no logs returned)"));
+      if (opts.verbose) {
+        console.log(result.logs || chalk.dim("  (no logs returned)"));
+        return;
+      }
+
+      const lines = result.logs.split(/\r?\n/).filter((line) => line.length > 0);
+      if (lines.length === 0) {
+        console.log(chalk.dim("  (no logs returned)"));
+        return;
+      }
+
+      const page = pageItems(lines, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+        defaultLimit: DEFAULT_LIST_LIMIT,
+      });
+      for (const line of page.items) {
+        console.log(truncateText(line, 180));
+      }
+      printPageHint(page, "Use --limit, --cursor, --verbose, --tail, or --json for more log detail.");
       return;
     }
 
@@ -1348,11 +1528,13 @@ program
           `    ${"NAME".padEnd(18)} ${"IMAGE".padEnd(18)} ${"STATUS".padEnd(20)} ${"CPU".padEnd(10)} ${"MEM".padEnd(18)} PORTS`
         )
       );
-      for (const container of result.containers) {
+      const page = pageItems(result.containers, { limit: opts.limit, cursor: opts.cursor });
+      for (const container of page.items) {
         console.log(
-          `    ${container.name.padEnd(18)} ${(container.image ?? "-").slice(0, 18).padEnd(18)} ${(container.status ?? "-").slice(0, 20).padEnd(20)} ${(container.cpuPercent ?? "-").padEnd(10)} ${(container.memUsage ?? "-").slice(0, 18).padEnd(18)} ${container.ports ?? "-"}`
+          `    ${truncateText(container.name, opts.verbose ? 36 : 18).padEnd(18)} ${truncateText(container.image ?? "-", opts.verbose ? 48 : 18).padEnd(18)} ${truncateText(container.status ?? "-", opts.verbose ? 40 : 20).padEnd(20)} ${(container.cpuPercent ?? "-").padEnd(10)} ${truncateText(container.memUsage ?? "-", 18).padEnd(18)} ${truncateText(container.ports ?? "-", opts.verbose ? 100 : 48)}`
         );
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more container detail.", "    ");
       console.log();
     }
   });
@@ -1449,6 +1631,9 @@ cronCmd
   .command("list")
   .description("List all cron jobs")
   .option("-m, --machine <id>", "Filter by machine ID")
+  .option("-n, --limit <n>", "Number of cron jobs to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show action type and command snippets")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
     let jobs: import("../db/schema.js").CronJobRow[] = [];
@@ -1467,13 +1652,16 @@ cronCmd
     if (jobs.length === 0) {
       console.log(chalk.dim("  No cron jobs configured."));
     } else {
-      console.log(chalk.bold(`  ${"ID".padEnd(6)} ${"NAME".padEnd(24)} ${"SCHEDULE".padEnd(16)} ${"ENABLED".padEnd(10)} LAST RUN`));
+      const page = pageItems(jobs, { limit: opts.limit, cursor: opts.cursor });
+      console.log(chalk.bold(`  ${"ID".padEnd(6)} ${"NAME".padEnd(24)} ${"SCHEDULE".padEnd(16)} ${"ENABLED".padEnd(10)} LAST RUN${opts.verbose ? " / ACTION / COMMAND" : ""}`));
       console.log("  " + chalk.dim("-".repeat(80)));
-      for (const j of jobs) {
+      for (const j of page.items) {
         const enabled = j.enabled ? chalk.green("yes") : chalk.dim("no");
         const lastRun = j.last_run_at ? formatTs(j.last_run_at) : chalk.dim("never");
-        console.log(`  ${String(j.id).padEnd(6)} ${j.name.padEnd(24)} ${j.schedule.padEnd(16)} ${enabled.padEnd(18)} ${lastRun}`);
+        const detail = opts.verbose ? ` ${j.action_type} ${chalk.dim(truncateText(j.command, 80))}` : "";
+        console.log(`  ${String(j.id).padEnd(6)} ${truncateText(j.name, 24).padEnd(24)} ${truncateText(j.schedule, 16).padEnd(16)} ${enabled.padEnd(18)} ${lastRun}${detail}`);
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more cron detail.");
     }
     console.log();
   });
@@ -1546,6 +1734,9 @@ program
   .command("search <query>")
   .description("Full-text search across machines, alerts, and processes")
   .option("-t, --tables <tables>", "Comma-separated tables to search: machines,alerts,processes")
+  .option("-n, --limit <n>", "Number of search results to show", parseLimitOption, DEFAULT_SEARCH_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-v, --verbose", "Show ranks and wider snippets")
   .option("-j, --json", "Output raw JSON")
   .action((query: string, opts) => {
     if (!query || query.trim().length === 0) {
@@ -1561,7 +1752,7 @@ program
       ? (opts.tables as string).split(",").map((t: string) => t.trim()).filter(Boolean)
       : undefined;
 
-    let results;
+    let results: ReturnType<typeof search> = [];
     try {
       results = search(query, tables);
     } catch (err) {
@@ -1578,13 +1769,20 @@ program
     if (results.length === 0) {
       console.log(chalk.dim(`  No results for "${query}"`));
     } else {
+      const page = pageItems(results, {
+        limit: opts.limit,
+        cursor: opts.cursor,
+        defaultLimit: DEFAULT_SEARCH_LIMIT,
+      });
       console.log(chalk.bold(`  ${results.length} result(s) for "${query}"`));
       console.log("  " + chalk.dim("-".repeat(70)));
-      for (const r of results) {
+      for (const r of page.items) {
         const tableLabel = chalk.cyan(r.table.padEnd(10));
         const idLabel = chalk.dim(`[${String(r.id)}]`);
-        console.log(`  ${tableLabel} ${idLabel} ${r.snippet}`);
+        const rank = opts.verbose ? chalk.dim(` rank=${r.rank.toFixed(3)}`) : "";
+        console.log(`  ${tableLabel} ${idLabel}${rank} ${truncateText(r.snippet, opts.verbose ? 220 : 120)}`);
       }
+      printPageHint(page, "Use --limit, --cursor, --verbose, or --json for more search detail.");
     }
     console.log();
   });
