@@ -34,9 +34,9 @@ Protected routes are marked **Auth** below.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | No | Service liveness with timestamp and service name |
-| `GET` | `/api/machines` | No | List machine records |
+| `GET` | `/api/machines` | No | List machine records, with `ssh_key_path` redacted |
 | `POST` | `/api/machines` | **Yes** | Create a machine |
-| `GET` | `/api/machines/:id` | No | Get one machine or `404` |
+| `GET` | `/api/machines/:id` | No | Get one machine or `404`, with `ssh_key_path` redacted |
 | `DELETE` | `/api/machines/:id` | **Yes** | Delete one machine |
 | `GET` | `/api/machines/:id/snapshot` | No | Live sanitized snapshot, doctor report, and runtime health |
 | `GET` | `/api/machines/:id/metrics` | No | Stored metric history |
@@ -55,6 +55,13 @@ Protected routes are marked **Auth** below.
 Unknown routes return `404`; unsupported methods return the route miss response.
 Validation errors use status `400` and include field-level details. Protected
 routes return `401` with a Bearer challenge when authorization fails.
+
+The two machine read routes are unauthenticated, so credential-bearing fields
+are redacted before they are serialized: `ssh_key_path` comes back as `***`
+whenever a key is configured (and `null` when one is not), and the
+config-sourced fallback used when the database cannot be opened redacts both
+`ssh.privateKeyPath` and `ssh.password`. See
+[docs/security.md](security.md#ssh-key-handling).
 
 ## Query Parameters
 

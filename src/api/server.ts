@@ -31,6 +31,9 @@ import {
   mergeStoredAndLiveAlerts,
 } from "../runtime-health.js";
 import {
+  sanitizeMachineConfigs,
+  sanitizeMachineRow,
+  sanitizeMachineRows,
   sanitizeProcessRow,
   sanitizeSearchResults,
   sanitizeSystemSnapshot,
@@ -256,10 +259,10 @@ route("GET", "/health", async () =>
 
 route("GET", "/api/machines", async () => {
   try {
-    return json(listMachines());
+    return json(sanitizeMachineRows(listMachines()));
   } catch {
     const config = loadConfig();
-    return json(config.machines);
+    return json(sanitizeMachineConfigs(config.machines));
   }
 });
 
@@ -309,7 +312,7 @@ route("GET", "/api/machines/:id", async (_, params) => {
   try {
     const machine = getMachine(id);
     if (!machine) return err("Machine not found", 404);
-    return json(machine);
+    return json(sanitizeMachineRow(machine));
   } catch {
     return err("Machine not found", 404);
   }

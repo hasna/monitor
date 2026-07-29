@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
   sanitizeCmd,
+  sanitizeMachineConfig,
+  sanitizeMachineConfigs,
+  sanitizeMachineRow,
+  sanitizeMachineRows,
   sanitizeProcessRow,
   sanitizeSearchResult,
   sanitizeSystemSnapshot,
@@ -523,5 +527,78 @@ describe("sanitizeSearchResult", () => {
     expect(JSON.stringify(sanitized)).not.toContain("search-secret");
     expect(sanitized.snippet).toBe("node app --api-key ***");
     expect(sanitized.row["cmd"]).toBe("node app --api-key ***");
+  });
+});
+
+describe("sanitizeMachineRow", () => {
+  it("redacts ssh_key_path without mutating the original row", () => {
+    const row = {
+      id: "build-node",
+      type: "ssh",
+      ssh_key_path: "/home/secretuser/.ssh/id_ed25519_PROD",
+    };
+
+    const sanitized = sanitizeMachineRow(row);
+
+    expect(sanitized).toEqual({ id: "build-node", type: "ssh", ssh_key_path: "***" });
+    expect(sanitized).not.toBe(row);
+    expect(row.ssh_key_path).toBe("/home/secretuser/.ssh/id_ed25519_PROD");
+  });
+
+  it("leaves a null key path alone", () => {
+    expect(sanitizeMachineRow({ id: "local", ssh_key_path: null }).ssh_key_path).toBeNull();
+  });
+
+  it("redacts every row in a list", () => {
+    const rows = sanitizeMachineRows([
+      { id: "a", ssh_key_path: "/root/.ssh/id_rsa" },
+      { id: "b", ssh_key_path: null },
+    ]);
+
+    expect(JSON.stringify(rows)).not.toContain("/root/.ssh/id_rsa");
+    expect(rows[0]?.ssh_key_path).toBe("***");
+    expect(rows[1]?.ssh_key_path).toBeNull();
+  });
+});
+
+describe("sanitizeMachineConfig", () => {
+  it("redacts the SSH key path and password from a config machine", () => {
+    const machine = {
+      id: "build-node",
+      label: "Build Node",
+      type: "ssh" as const,
+      ssh: {
+        host: "build.example.test",
+        username: "ops",
+        privateKeyPath: "/home/secretuser/.ssh/id_ed25519_PROD",
+        password: "P4ssw0rd-LEAK-CANARY",
+      },
+    };
+
+    const sanitized = sanitizeMachineConfig(machine);
+
+    expect(JSON.stringify(sanitized)).not.toContain("P4ssw0rd-LEAK-CANARY");
+    expect(JSON.stringify(sanitized)).not.toContain("/home/secretuser/.ssh/id_ed25519_PROD");
+    expect(sanitized.ssh?.privateKeyPath).toBe("***");
+    expect(sanitized.ssh?.password).toBe("***");
+    expect(sanitized.ssh?.host).toBe("build.example.test");
+    expect(sanitized.ssh?.username).toBe("ops");
+    expect(machine.ssh.password).toBe("P4ssw0rd-LEAK-CANARY");
+  });
+
+  it("does not invent SSH fields that were not configured", () => {
+    const sanitized = sanitizeMachineConfig({
+      id: "keyless",
+      label: "Keyless",
+      type: "ssh",
+      ssh: { host: "keyless.example.test", username: "ops" },
+    });
+
+    expect(Object.keys(sanitized.ssh ?? {}).sort()).toEqual(["host", "username"]);
+  });
+
+  it("passes local machines through untouched", () => {
+    const sanitized = sanitizeMachineConfigs([{ id: "local", label: "Local", type: "local" }]);
+    expect(sanitized).toEqual([{ id: "local", label: "Local", type: "local" }]);
   });
 });

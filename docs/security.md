@@ -54,9 +54,10 @@ This prevents AI agents from reading secrets that may be passed as command-line 
 ## SSH Key Handling
 
 - Machine records store only the **path** to the SSH private key (`ssh_key_path`), never the key contents.
-- The SSH client reads the referenced key when connecting, but API and MCP responses do not expose the key path or key contents.
+- The SSH client reads the referenced key when connecting, but the path is redacted to `***` before a machine record leaves the process — `GET /api/machines`, `GET /api/machines/:id`, and the `monitor_machines` MCP tool all return `ssh_key_path: "***"` when a key is configured, and `null` when one is not. The REST read routes are unauthenticated, so this redaction is what keeps a map of on-host private-key locations off the wire.
 - SSH key paths should be restricted to the user's home directory — keys outside `~/` are used at the operator's risk.
-- JSON config supports an optional SSH password. Prefer key authentication and protect the config file as credential-bearing when a password is present.
+- JSON config supports an optional SSH password. It is redacted the same way when config-sourced machines are served (the fallback used when the database cannot be opened), but it is stored in plain JSON, so prefer key authentication and protect the config file as credential-bearing when a password is present.
+- `monitor machines --json` reads the database directly and prints the real path — the redaction is a boundary on API and MCP responses, not on local operator output.
 
 ---
 

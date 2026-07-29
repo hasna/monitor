@@ -261,6 +261,34 @@ describe("GET /api/machines", () => {
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
   });
+
+  it("redacts ssh_key_path from the unauthenticated list", async () => {
+    await post("/api/machines", {
+      id: "ssh-leak-list",
+      name: "SSH Leak List",
+      type: "ssh",
+      host: "build.example.test",
+      ssh_key_path: "/home/secretuser/.ssh/id_ed25519_PROD",
+    });
+
+    const res = await get("/api/machines");
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<{ id: string; ssh_key_path: string | null }>;
+
+    expect(JSON.stringify(body)).not.toContain("/home/secretuser/.ssh/id_ed25519_PROD");
+    const machine = body.find((entry) => entry.id === "ssh-leak-list");
+    expect(machine?.ssh_key_path).toBe("***");
+  });
+
+  it("leaves ssh_key_path null when no key is configured", async () => {
+    await post("/api/machines", { id: "no-key-machine", name: "No Key", type: "local" });
+
+    const res = await get("/api/machines");
+    const body = await res.json() as Array<{ id: string; ssh_key_path: string | null }>;
+    const machine = body.find((entry) => entry.id === "no-key-machine");
+
+    expect(machine?.ssh_key_path).toBeNull();
+  });
 });
 
 // ── POST /api/machines ────────────────────────────────────────────────────────
@@ -316,6 +344,23 @@ describe("GET /api/machines/:id", () => {
   it("returns 404 for unknown machine", async () => {
     const res = await get("/api/machines/does-not-exist-xyz");
     expect(res.status).toBe(404);
+  });
+
+  it("redacts ssh_key_path on the unauthenticated single-machine route", async () => {
+    await post("/api/machines", {
+      id: "ssh-leak-single",
+      name: "SSH Leak Single",
+      type: "ssh",
+      host: "build.example.test",
+      ssh_key_path: "/home/secretuser/.ssh/id_ed25519_PROD",
+    });
+
+    const res = await get("/api/machines/ssh-leak-single");
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+
+    expect(raw).not.toContain("/home/secretuser/.ssh/id_ed25519_PROD");
+    expect((JSON.parse(raw) as { ssh_key_path: string | null }).ssh_key_path).toBe("***");
   });
 });
 
