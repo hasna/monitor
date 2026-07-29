@@ -1,5 +1,9 @@
+import type { MachineConfig } from "./config.js";
 import type { SystemSnapshot } from "./collectors/local.js";
 import type { SearchResult } from "./db/search.js";
+
+/** Placeholder written over any credential-bearing value before it leaves the process. */
+const REDACTED = "***";
 
 const SHELL_VALUE_PATTERN = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)`;
 
@@ -434,23 +438,71 @@ export function sanitizeSystemSnapshot(snapshot: SystemSnapshot): SystemSnapshot
   };
 }
 
+/**
+ * A search hit carries the whole source row, so every table that has a
+ * credential-bearing column needs the same redaction the dedicated read routes
+ * apply — `processes` for the command line, `machines` for the SSH key path.
+ */
 export function sanitizeSearchResult<T extends SearchResult>(result: T): T {
   const sanitizedSnippet = sanitizeCmd(result.snippet);
-  if (result.table !== "processes") {
-    return { ...result, snippet: sanitizedSnippet };
+
+  if (result.table === "processes") {
+    const cmd = result.row["cmd"];
+    return {
+      ...result,
+      snippet: sanitizedSnippet,
+      row: {
+        ...result.row,
+        cmd: typeof cmd === "string" ? sanitizeCmd(cmd) : cmd,
+      },
+    };
   }
 
-  const cmd = result.row["cmd"];
-  return {
-    ...result,
-    snippet: sanitizedSnippet,
-    row: {
-      ...result.row,
-      cmd: typeof cmd === "string" ? sanitizeCmd(cmd) : cmd,
-    },
-  };
+  if (result.table === "machines") {
+    return { ...result, snippet: sanitizedSnippet, row: sanitizeMachineRow(result.row) };
+  }
+
+  return { ...result, snippet: sanitizedSnippet };
 }
 
 export function sanitizeSearchResults<T extends SearchResult>(results: T[]): T[] {
   return results.map(sanitizeSearchResult);
+}
+
+/**
+ * Machine records point at the operator's SSH private key. The key path is a
+ * map of where private keys live on the host, the REST read routes that serve
+ * machine records are unauthenticated, and no caller needs it — the SSH
+ * collector reads the path straight from the database (see
+ * `src/collectors/index.ts`). Redact it before the record leaves the process.
+ */
+export function sanitizeMachineRow<T extends { ssh_key_path?: unknown }>(row: T): T {
+  if (row.ssh_key_path == null) return { ...row };
+  return { ...row, ssh_key_path: REDACTED } as T;
+}
+
+export function sanitizeMachineRows<T extends { ssh_key_path?: string | null }>(rows: T[]): T[] {
+  return rows.map(sanitizeMachineRow);
+}
+
+/**
+ * Config-sourced machines carry the same key path plus an optional SSH
+ * password in plain JSON, and they are served by the same unauthenticated
+ * routes whenever the database cannot be opened. Redact both.
+ */
+export function sanitizeMachineConfig(machine: MachineConfig): MachineConfig {
+  const ssh = machine.ssh;
+  if (!ssh) return { ...machine };
+  return {
+    ...machine,
+    ssh: {
+      ...ssh,
+      ...(ssh.privateKeyPath === undefined ? {} : { privateKeyPath: REDACTED }),
+      ...(ssh.password === undefined ? {} : { password: REDACTED }),
+    },
+  };
+}
+
+export function sanitizeMachineConfigs(machines: MachineConfig[]): MachineConfig[] {
+  return machines.map(sanitizeMachineConfig);
 }

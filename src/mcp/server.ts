@@ -62,6 +62,7 @@ import { scanListeningPorts, scanListeningPortsAcrossMachines } from "../ports.j
 import { getTailscaleStatus, getTailscaleStatusAcrossMachines } from "../tailscale.js";
 import { getTemperatureStatus, getTemperatureStatusAcrossMachines } from "../temperature.js";
 import {
+  sanitizeMachineRows,
   sanitizeProcessRow,
   sanitizeSearchResults,
   sanitizeSystemSnapshot,
@@ -1528,7 +1529,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }));
         }
         if (a["verbose"] === true) {
-          return jsonContent(machines);
+          return jsonContent(sanitizeMachineRows(machines));
         }
 
         const page = pageItems(machines, getLimitArgs(a));
@@ -1542,7 +1543,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             last_seen: machine.last_seen,
           })),
           page: pageSummary(page),
-          hint: compactMcpHint(page, "Pass verbose=true for host, SSH, EC2, tags, and created_at fields."),
+          hint: compactMcpHint(page, "Pass verbose=true for host, port, EC2, tags, and created_at fields (SSH key paths are redacted)."),
         });
       }
 

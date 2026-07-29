@@ -54,8 +54,11 @@ This prevents AI agents from reading secrets that may be passed as command-line 
 ## SSH Key Handling
 
 - Machine records store only the **path** to the SSH private key (`ssh_key_path`), never the key contents.
-- The key path is never read or exposed by any API endpoint or MCP tool.
+- The SSH client reads the referenced key when connecting, but the path is redacted to `***` before a machine record leaves the process — `GET /api/machines`, `GET /api/machines/:id`, and the `monitor_machines` MCP tool all return `ssh_key_path: "***"` when a key is configured, and `null` when one is not. The REST read routes are unauthenticated, so this redaction is what keeps a map of on-host private-key locations off the wire.
+- Full-text search returns the whole source row, so it is the same disclosure by another route: a `machines` hit from `GET /api/search` or the `monitor_search` MCP tool is redacted identically. `machines_fts` does not index `ssh_key_path`, so the snippet cannot carry it either.
 - SSH key paths should be restricted to the user's home directory — keys outside `~/` are used at the operator's risk.
+- JSON config supports an optional SSH password. It is redacted the same way when config-sourced machines are served (the fallback used when the database cannot be opened), but it is stored in plain JSON, so prefer key authentication and protect the config file as credential-bearing when a password is present.
+- `monitor machines --json` reads the database directly and prints the real path — the redaction is a boundary on API and MCP responses, not on local operator output.
 
 ---
 
@@ -97,7 +100,7 @@ All user-supplied inputs are validated with Zod schemas (`src/validation.ts`) be
 - The SQLite database is stored in `~/.hasna/monitor/monitor.db`.
 - `MONITOR_CONFIG_DIR` may be set to isolate config and SQLite storage in CI,
   tests, or agent sandboxes.
-- No credentials are stored in the config file (only key paths, not key contents).
+- Private-key contents are not stored in config. Optional SSH passwords are stored as plain JSON, so keep the config user-readable only and prefer key authentication.
 
 ---
 

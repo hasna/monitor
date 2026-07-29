@@ -17,7 +17,7 @@ _monitor() {
   local cur prev words cword
   _init_completion || return
 
-  local subcommands="status machines add doctor ps kill alerts apps compare-apps service containers ports tailscale temperature mcp-health mcp-status mcp-restart report cron search migrate serve mcp completions help"
+  local subcommands="status health machines add doctor ps mcp-health mcp-status mcp-restart exec kill alerts apps compare-apps service temperature ports loop-check tailscale containers report cron search migrate retention integrations serve mcp sync completions help"
 
   case "$prev" in
     monitor)
@@ -34,6 +34,11 @@ _monitor() {
       else
         COMPREPLY=($(compgen -W "$machines" -- "$cur"))
       fi
+      return
+      ;;
+
+    health)
+      COMPREPLY=($(compgen -W "-j --json --probe-services" -- "$cur"))
       return
       ;;
 
@@ -67,7 +72,7 @@ _monitor() {
       ;;
 
     report)
-      COMPREPLY=($(compgen -W "-p --period -s --send --schedule -j --json" -- "$cur"))
+      COMPREPLY=($(compgen -W "-p --period -s --send --schedule --allow-live-cloud-polling -j --json" -- "$cur"))
       return
       ;;
 
@@ -108,6 +113,11 @@ _monitor() {
 
     mcp-restart)
       COMPREPLY=($(compgen -W "-m --machine -j --json" -- "$cur"))
+      return
+      ;;
+
+    exec)
+      COMPREPLY=($(compgen -W "-m --machine -a --all --no-enter --timeout-ms -j --json" -- "$cur"))
       return
       ;;
 
@@ -177,7 +187,27 @@ _monitor() {
       ;;
 
     serve)
-      COMPREPLY=($(compgen -W "-p --port" -- "$cur"))
+      COMPREPLY=($(compgen -W "-p --port -H --host" -- "$cur"))
+      return
+      ;;
+
+    retention)
+      COMPREPLY=($(compgen -W "--full-res-hours --hourly-days --daily-days --dry-run" -- "$cur"))
+      return
+      ;;
+
+    loop-check)
+      COMPREPLY=($(compgen -W "listening-ports workspace-ports process-hygiene quarantine-retention" -- "$cur"))
+      return
+      ;;
+
+    integrations)
+      COMPREPLY=($(compgen -W "list test" -- "$cur"))
+      return
+      ;;
+
+    sync)
+      COMPREPLY=($(compgen -W "push pull status" -- "$cur"))
       return
       ;;
 
@@ -196,7 +226,7 @@ _monitor() {
   local i subcommand=""
   for (( i=1; i < cword; i++ )); do
     case "${words[$i]}" in
-      status|machines|add|doctor|ps|kill|alerts|apps|compare-apps|service|containers|ports|tailscale|temperature|mcp-health|mcp-status|mcp-restart|report|cron|search|migrate|serve|mcp|completions)
+      status|health|machines|add|doctor|ps|mcp-health|mcp-status|mcp-restart|exec|kill|alerts|apps|compare-apps|service|temperature|ports|loop-check|tailscale|containers|report|cron|search|migrate|retention|integrations|serve|mcp|sync|completions)
         subcommand="${words[$i]}"
         break
         ;;
@@ -302,7 +332,7 @@ _monitor() {
           COMPREPLY=($(compgen -W "daily weekly" -- "$cur"))
           ;;
         *)
-          COMPREPLY=($(compgen -W "-p --period -s --send --schedule -j --json" -- "$cur"))
+          COMPREPLY=($(compgen -W "-p --period -s --send --schedule --allow-live-cloud-polling -j --json" -- "$cur"))
           ;;
       esac
       ;;
@@ -320,11 +350,20 @@ _monitor() {
           ;;
       esac
       ;;
+    loop-check)
+      COMPREPLY=($(compgen -W "listening-ports workspace-ports process-hygiene quarantine-retention -j --json --evidence-dir --no-evidence --max-evidence-items --max-task-seeds --upsert-tasks --todos-project --task-list --todos-bin --max-task-actions --allow --workspace --machine --max-repos --max-files --high-mem-mb --stuck-hours --root --max-gb --target-gb --apply" -- "$cur"))
+      ;;
+    integrations)
+      COMPREPLY=($(compgen -W "list test -j --json todos conversations mementos emails" -- "$cur"))
+      ;;
+    sync)
+      COMPREPLY=($(compgen -W "push pull status -t --tables" -- "$cur"))
+      ;;
     search)
       COMPREPLY=($(compgen -W "-t --tables -n --limit --cursor -v --verbose -j --json" -- "$cur"))
       ;;
     completions)
-      COMPREPLY=($(compgen -W "zsh bash install" -- "$cur"))
+      COMPREPLY=($(compgen -W "zsh bash install -s --shell" -- "$cur"))
       ;;
   esac
 }

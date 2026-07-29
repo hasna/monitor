@@ -32,5 +32,5 @@ Key measures include:
 - Kill rate limiting — max 5 kills per machine per minute
 - SIGKILL requires explicit `force: true`
 - Process command lines are sanitized to redact secrets before being returned to callers
-- SSH key paths are stored — key contents are never read or exposed
+- SSH key paths are stored — the SSH client reads the key for authentication, but API and MCP responses redact the path to `***` and never carry key contents
 - All user inputs are validated with Zod schemas
