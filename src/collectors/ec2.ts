@@ -12,6 +12,7 @@ import {
 } from "@aws-sdk/client-ssm";
 import type { CollectorResult, SystemSnapshot } from "./local.js";
 import type { CommandOptions, CommandResult } from "./command.js";
+import { parseProcessListOutput, PROCESS_LIST_COMMAND } from "./process-list.js";
 
 export interface Ec2CollectorOptions {
   machineId: string;
@@ -203,36 +204,10 @@ export class Ec2Collector {
     };
   }
 
-  /**
-   * Use SSM RunCommand to get top processes.
-   */
+  /** Use SSM RunCommand to get processes. */
   private async getSsmProcesses(): Promise<SystemSnapshot["processes"]> {
-    const output = await this.runSsmCommand(
-      "ps aux --no-headers --sort=-%cpu | head -50"
-    );
-    return output
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const parts = line.trim().split(/\s+/);
-        const pid = parseInt(parts[1] ?? "0", 10);
-        const cpuPct = parseFloat(parts[2] ?? "0");
-        const rssKb = parseInt(parts[5] ?? "0", 10);
-        const stat = parts[7] ?? "";
-        const name = parts.slice(10).join(" ") || parts[parts.length - 1] || "";
-        return {
-          pid,
-          ppid: 0,
-          name,
-          cmd: name,
-          cpuPercent: cpuPct,
-          memMb: rssKb / 1024,
-          state: stat,
-          isZombie: stat.startsWith("Z"),
-          isOrphan: false,
-        };
-      });
+    const output = await this.runSsmCommand(PROCESS_LIST_COMMAND);
+    return parseProcessListOutput(output);
   }
 
   /**

@@ -95,6 +95,9 @@ _monitor() {
             '(-v --verbose)'{-v,--verbose}'[Include command snippets]' \
             '(-s --sort)'{-s,--sort}'[Sort by]:sort:(cpu mem)' \
             '(-f --filter)'{-f,--filter}'[Filter]:filter:(all zombies orphans high_mem)' \
+            '--user[Filter by process owner]:name:' \
+            '--name[Filter command/name by substring or /regex/]:pattern:' \
+            '--tree[Render the parent/child process tree]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
           ;;

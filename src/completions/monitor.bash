@@ -127,7 +127,7 @@ _monitor() {
       ;;
 
     ps)
-      local opts="-n --limit --cursor -v --verbose -s --sort -f --filter -j --json"
+      local opts="-n --limit --cursor -v --verbose -s --sort -f --filter --user --name --tree -j --json"
       if [[ "$cur" == -* ]]; then
         COMPREPLY=($(compgen -W "$opts" -- "$cur"))
       else
