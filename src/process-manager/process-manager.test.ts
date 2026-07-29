@@ -257,6 +257,29 @@ describe("ProcessManager.analyse()", () => {
   });
 });
 
+describe("ProcessManager.kill()", () => {
+  it("executes a validated kill through a provided remote collector", async () => {
+    const commands: string[] = [];
+    const pm = new ProcessManager();
+    const action = await pm.kill(12345, "SIGKILL", `remote-test-${Date.now()}`, {
+      async runCommand(command) {
+        commands.push(command);
+        return {
+          ok: true,
+          stdout: "",
+          stderr: "",
+          exitCode: 0,
+          durationMs: 1,
+          timedOut: false,
+        };
+      },
+    });
+
+    expect(commands).toEqual(["kill -9 12345"]);
+    expect(action.action).toBe("killed");
+  });
+});
+
 // ── SAFE_PROCESSES constant ───────────────────────────────────────────────────
 
 describe("SAFE_PROCESSES", () => {

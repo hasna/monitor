@@ -994,9 +994,16 @@ program
         fail(`Invalid name pattern: ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      const collector = getCollectorForMachine(machineId);
+      let collector: ReturnType<typeof getCollectorForMachine>;
+      try {
+        collector = getCollectorForMachine(machineId);
+      } catch (error) {
+        return fail(
+          `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       const result = await collector.collect();
-      if (!result.ok) fail(`Error collecting snapshot: ${result.error}`);
+      if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
 
       const matches = result.snapshot.processes
         .filter((proc) =>
@@ -1063,8 +1070,10 @@ program
 
       const pm = new ProcessManager();
       const actions: Array<ProcessAction & { cmd: string }> = [];
+      const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
+      const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
       for (const match of matches) {
-        const action = await pm.kill(match.pid, signal, machineId);
+        const action = await pm.kill(match.pid, signal, killMachineId, remoteCollector);
         actions.push({ ...action, name: match.name, cmd: match.cmd });
       }
 

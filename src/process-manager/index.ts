@@ -2,6 +2,7 @@ import { execSync } from "child_process";
 import type { ProcessRow } from "../db/schema.js";
 import type { ProcessInfo } from "../collectors/local.js";
 import type { SshCollector } from "../collectors/ssh.js";
+import type { Collector } from "../collectors/index.js";
 
 // ── Kill rate limiter ────────────────────────────────────────────────────────
 
@@ -232,15 +233,15 @@ export class ProcessManager {
   }
 
   /**
-   * Kill a process locally by PID.
+   * Kill a process by PID.
    * When machineId is provided and is not "local", the caller is responsible
-   * for forwarding this via SSH (pass sshCollector).
+   * for providing the collector used to execute the remote command.
    */
   async kill(
     pid: number,
     signal: KillSignal = "SIGTERM",
     machineId = "local",
-    sshCollector?: SshCollector
+    remoteCollector?: Pick<Collector, "runCommand">
   ): Promise<ProcessAction> {
     const name = `pid:${pid}`;
 
@@ -264,12 +265,12 @@ export class ProcessManager {
       };
     }
 
-    if (machineId !== "local" && !sshCollector) {
+    if (machineId !== "local" && !remoteCollector) {
       return {
         pid,
         name,
         action: "skipped",
-        reason: "Remote kill requires an sshCollector",
+        reason: "Remote kill requires a collector",
       };
     }
 
@@ -280,18 +281,13 @@ export class ProcessManager {
 
       if (machineId === "local") {
         execSync(cmd);
-      } else if (sshCollector) {
-        // SshCollector doesn't expose a raw run method publicly; we reconnect
-        // and use collect() side-effect — instead we use a workaround:
-        // The sshCollector's connect() + private run() are not exposed, so we
-        // leverage the existing mechanism by casting as any.
-        // In practice, callers should extend SshCollector with a public exec().
-        const sc = sshCollector as unknown as {
-          connect(): Promise<void>;
-          run(cmd: string): Promise<string>;
-        };
-        await sc.connect();
-        await sc.run(cmd);
+      } else if (remoteCollector) {
+        const result = await remoteCollector.runCommand(cmd);
+        if (!result.ok) {
+          throw new Error(
+            result.error || result.stderr || `Remote command exited with ${result.exitCode}`
+          );
+        }
       }
 
       return {
