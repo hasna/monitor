@@ -71,7 +71,7 @@ Override standalone bin ports with `PORT`, for example `PORT=9000 monitor-web`.
 monitor status
 
 # Add a remote SSH machine
-monitor add linux-node-a --type ssh --host linux-node-a.example.com --user ubuntu --key ~/.ssh/id_ed25519
+monitor add linux-node-a --type ssh --host linux-node-a.example.com --key ~/.ssh/id_ed25519
 
 # Show all machines
 monitor machines
@@ -126,6 +126,7 @@ to get the legacy full payload, including full rows and nested details.
 | `monitor_snapshot` | Get current metrics snapshot (CPU, memory, disk, GPU) |
 | `monitor_health` | Run health checks and return pass/warn/fail status |
 | `monitor_processes` | List running processes with optional filters |
+| `monitor_exec` | Send a command to a tmux pane, window, or every pane on a machine |
 | `monitor_apps` | List installed apps/packages or compare inventories across machines |
 | `monitor_service` | List or control system services and detected dev servers |
 | `monitor_containers` | List containers and resource usage on one or all machines |
@@ -152,6 +153,9 @@ to get the legacy full payload, including full rows and nested details.
 
 ## CLI Reference
 
+See [docs/cli.md](docs/cli.md) for the complete command and option reference,
+including loop checks, retention, sync, and administration commands.
+
 ```
 monitor <command> [options]
 ```
@@ -166,10 +170,12 @@ output, such as `monitor ps`.
 | Command | Description |
 |---------|-------------|
 | `status [machine]` | Show current system snapshot (CPU, memory, disk, GPU) |
+| `health` | Show metadata-only monitor health counts, optionally probing services |
 | `machines` | List all configured machines |
 | `add <name>` | Add a machine to monitor |
 | `doctor [machine]` | Run health checks with diagnostics |
 | `ps [machine]` | List processes, with optional filter |
+| `exec [target] <command>` | Send a command to one tmux target or all panes on a machine |
 | `kill <pid>` | Kill a process by PID |
 | `alerts [machine]` | Show recent alerts |
 | `apps [machine]` | List installed apps/packages or compare them across machines |
@@ -182,6 +188,7 @@ output, such as `monitor ps`.
 | `mcp-health [machine]` | Check Claude MCP registration health and dead tmux panes |
 | `mcp-status [machine]` | Show MCP health plus best-effort matched process PIDs, memory, and uptime |
 | `mcp-restart <name>` | Restart a matched MCP process if one is running, then re-check health |
+| `loop-check <check>` | Run bounded listening-port, workspace-port, process, or retention diagnostics |
 | `report` | Build a daily fleet health report |
 | `report --send` | Deliver the current report via configured integrations |
 | `report --schedule daily|weekly` | Create or update a scheduled fleet report job |
@@ -189,7 +196,8 @@ output, such as `monitor ps`.
 | `cron add <name> <schedule> <command>` | Add a cron job |
 | `cron run <job-id>` | Run a cron job immediately |
 | `search <query>` | Full-text search |
-| `migrate` | Run database migrations |
+| `migrate` | Move legacy config and database files into `~/.hasna/monitor/` |
+| `retention` | Downsample old metrics and prune stale database rows |
 | `integrations list` | List integration status |
 | `integrations test <name>` | Test an integration |
 | `serve` | Start the API server |
@@ -207,22 +215,20 @@ output, such as `monitor ps`.
 
 ```bash
 # Local machine (default)
-monitor add mybox
+monitor add mybox --type local
 
 # SSH machine
 monitor add linux-node-a \
   --type ssh \
   --host linux-node-a.example.com \
-  --user ubuntu \
   --key ~/.ssh/id_ed25519 \
   --port 22
 
 # EC2 machine (uses AWS SSM)
 monitor add prod-api \
   --type ec2 \
-  --instance-id i-0abc123def456789 \
-  --region us-east-1 \
-  --profile my-aws-profile
+  --aws-instance-id i-0abc123def456789 \
+  --aws-region us-east-1
 ```
 
 ### monitor ps
@@ -241,8 +247,8 @@ monitor ps --json              # raw JSON output
 
 ```bash
 monitor kill 1234              # SIGTERM (default)
-monitor kill 1234 --signal SIGKILL
-monitor kill 1234 --signal 9
+monitor kill 1234 --force      # SIGKILL
+monitor kill 1234 --dry-run    # validate and show the action only
 ```
 
 ### monitor apps
@@ -392,6 +398,9 @@ The dashboard shows:
 - Cron job schedule
 
 Default port is `3848`. Override it with `PORT=9000 monitor-web`.
+
+The API route, authentication, request body, query parameter, SSE, and CORS
+reference is available in [docs/api.md](docs/api.md).
 
 ## Configuration
 

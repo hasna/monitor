@@ -9,10 +9,12 @@ _monitor() {
   local -a subcommands
   subcommands=(
     'status:Show current system snapshot (CPU, memory, disk, GPU)'
+    'health:Show metadata-only monitor health counts'
     'machines:List all configured machines'
     'add:Add a machine to monitor'
     'doctor:Run health checks and show colored report'
     'ps:Show process table'
+    'exec:Send a command to a tmux target or all panes'
     'kill:Kill a process by PID'
     'alerts:List alerts for a machine'
     'apps:Show installed apps or compare them across machines'
@@ -22,6 +24,7 @@ _monitor() {
     'ports:Show listening TCP and UDP ports'
     'tailscale:Show Tailscale peer status and latency'
     'temperature:Show CPU/GPU thermals, fan speeds, and alerts'
+    'loop-check:Run bounded loop-ready diagnostics'
     'mcp-health:Inspect Claude MCP server status and dead tmux panes'
     'mcp-status:Show MCP server health with matched process details'
     'mcp-restart:Restart a matched MCP process and re-check health'
@@ -29,8 +32,11 @@ _monitor() {
     'cron:Manage cron jobs'
     'search:Full-text search across machines, alerts, and processes'
     'migrate:Migrate config from legacy locations'
-    'serve:Start the REST API and web server'
+    'retention:Downsample old metrics and prune stale rows'
+    'integrations:Manage open-* ecosystem integrations'
+    'serve:Start the REST API server'
     'mcp:Start the MCP server (stdio transport)'
+    'sync:Sync local data with cloud PostgreSQL'
     'completions:Generate shell completion scripts'
     'help:Display help for a command'
   )
@@ -51,6 +57,11 @@ _monitor() {
           _arguments \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
+          ;;
+        health)
+          _arguments \
+            '(-j --json)'{-j,--json}'[Output metadata-only JSON]' \
+            '--probe-services[Probe managed services and include status counts]'
           ;;
         machines)
           _arguments \
@@ -86,6 +97,16 @@ _monitor() {
             '(-f --filter)'{-f,--filter}'[Filter]:filter:(all zombies orphans high_mem)' \
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1::machine-id:_monitor_machine_ids'
+          ;;
+        exec)
+          _arguments \
+            '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '(-a --all)'{-a,--all}'[Broadcast to every tmux pane]' \
+            '--no-enter[Type the command without pressing Enter]' \
+            '--timeout-ms[Command timeout in milliseconds]:milliseconds:' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::target:' \
+            '2:command:'
           ;;
         kill)
           _arguments \
@@ -189,7 +210,33 @@ _monitor() {
             '(-p --period)'{-p,--period}'[Report window]:period:(daily weekly)' \
             '(-s --send)'{-s,--send}'[Send via configured conversations/emails integrations]' \
             '--schedule[Create or update a scheduled report job]:period:(daily weekly)' \
+            '--allow-live-cloud-polling[Include EC2/cloud machines after explicit approval]' \
             '(-j --json)'{-j,--json}'[Output raw JSON]'
+          ;;
+        loop-check)
+          _arguments \
+            '1:check:(listening-ports workspace-ports process-hygiene quarantine-retention)' \
+            '(-j --json)'{-j,--json}'[Output compact JSON]' \
+            '--evidence-dir[Directory for bounded JSON evidence]:path:_directories' \
+            '--no-evidence[Do not write an evidence file]' \
+            '--max-evidence-items[Maximum evidence entries per issue]:n:' \
+            '--max-task-seeds[Maximum task seeds emitted]:n:' \
+            '--upsert-tasks[Create deduped todos tasks]' \
+            '--todos-project[Todos project path]:path:' \
+            '--task-list[Todos task list ID]:id:' \
+            '--todos-bin[Todos executable]:path:_command_names' \
+            '--max-task-actions[Maximum task upsert actions]:n:' \
+            '--allow[Allowed exposed host and port]:host-port:' \
+            '--workspace[Workspace root to scan]:path:_directories' \
+            '--machine[Machine used for live scans]:machine-id:_monitor_machine_ids' \
+            '--max-repos[Maximum repositories to inspect]:n:' \
+            '--max-files[Maximum candidate files to inspect]:n:' \
+            '--high-mem-mb[High-memory threshold in MiB]:n:' \
+            '--stuck-hours[Long-running threshold in hours]:n:' \
+            '--root[Quarantine root]:path:_directories' \
+            '--max-gb[Retention trigger in GiB]:n:' \
+            '--target-gb[Retention target in GiB]:n:' \
+            '--apply[Delete eligible generated-cache payloads]'
           ;;
         cron)
           local -a cron_subcommands
@@ -238,6 +285,24 @@ _monitor() {
             '(-j --json)'{-j,--json}'[Output raw JSON]' \
             '1:query:'
           ;;
+        retention)
+          _arguments \
+            '--full-res-hours[Keep full-resolution data for N hours]:hours:' \
+            '--hourly-days[Keep hourly rollups for N days]:days:' \
+            '--daily-days[Keep daily rollups for N days]:days:' \
+            '--dry-run[Show retention settings without deleting]'
+          ;;
+        integrations)
+          _arguments \
+            '1:action:(list test)' \
+            '2::integration:(todos conversations mementos emails)' \
+            '(-j --json)'{-j,--json}'[Output raw JSON for list]'
+          ;;
+        sync)
+          _arguments \
+            '1:action:(push pull status)' \
+            '(-t --tables)'{-t,--tables}'[Comma-separated table names]:tables:'
+          ;;
         completions)
           local -a completion_subcommands
           completion_subcommands=(
@@ -255,7 +320,8 @@ _monitor() {
           ;;
         serve)
           _arguments \
-            '(-p --port)'{-p,--port}'[API port]:port:'
+            '(-p --port)'{-p,--port}'[API port]:port:' \
+            '(-H --host)'{-H,--host}'[API host/interface]:host:'
           ;;
       esac
       ;;

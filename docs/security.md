@@ -54,8 +54,9 @@ This prevents AI agents from reading secrets that may be passed as command-line 
 ## SSH Key Handling
 
 - Machine records store only the **path** to the SSH private key (`ssh_key_path`), never the key contents.
-- The key path is never read or exposed by any API endpoint or MCP tool.
+- The SSH client reads the referenced key when connecting, but API and MCP responses do not expose the key path or key contents.
 - SSH key paths should be restricted to the user's home directory — keys outside `~/` are used at the operator's risk.
+- JSON config supports an optional SSH password. Prefer key authentication and protect the config file as credential-bearing when a password is present.
 
 ---
 
@@ -97,7 +98,7 @@ All user-supplied inputs are validated with Zod schemas (`src/validation.ts`) be
 - The SQLite database is stored in `~/.hasna/monitor/monitor.db`.
 - `MONITOR_CONFIG_DIR` may be set to isolate config and SQLite storage in CI,
   tests, or agent sandboxes.
-- No credentials are stored in the config file (only key paths, not key contents).
+- Private-key contents are not stored in config. Optional SSH passwords are stored as plain JSON, so keep the config user-readable only and prefer key authentication.
 
 ---
 
