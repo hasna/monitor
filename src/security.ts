@@ -438,21 +438,31 @@ export function sanitizeSystemSnapshot(snapshot: SystemSnapshot): SystemSnapshot
   };
 }
 
+/**
+ * A search hit carries the whole source row, so every table that has a
+ * credential-bearing column needs the same redaction the dedicated read routes
+ * apply — `processes` for the command line, `machines` for the SSH key path.
+ */
 export function sanitizeSearchResult<T extends SearchResult>(result: T): T {
   const sanitizedSnippet = sanitizeCmd(result.snippet);
-  if (result.table !== "processes") {
-    return { ...result, snippet: sanitizedSnippet };
+
+  if (result.table === "processes") {
+    const cmd = result.row["cmd"];
+    return {
+      ...result,
+      snippet: sanitizedSnippet,
+      row: {
+        ...result.row,
+        cmd: typeof cmd === "string" ? sanitizeCmd(cmd) : cmd,
+      },
+    };
   }
 
-  const cmd = result.row["cmd"];
-  return {
-    ...result,
-    snippet: sanitizedSnippet,
-    row: {
-      ...result.row,
-      cmd: typeof cmd === "string" ? sanitizeCmd(cmd) : cmd,
-    },
-  };
+  if (result.table === "machines") {
+    return { ...result, snippet: sanitizedSnippet, row: sanitizeMachineRow(result.row) };
+  }
+
+  return { ...result, snippet: sanitizedSnippet };
 }
 
 export function sanitizeSearchResults<T extends SearchResult>(results: T[]): T[] {
@@ -466,7 +476,7 @@ export function sanitizeSearchResults<T extends SearchResult>(results: T[]): T[]
  * collector reads the path straight from the database (see
  * `src/collectors/index.ts`). Redact it before the record leaves the process.
  */
-export function sanitizeMachineRow<T extends { ssh_key_path?: string | null }>(row: T): T {
+export function sanitizeMachineRow<T extends { ssh_key_path?: unknown }>(row: T): T {
   if (row.ssh_key_path == null) return { ...row };
   return { ...row, ssh_key_path: REDACTED } as T;
 }

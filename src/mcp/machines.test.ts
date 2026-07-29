@@ -1,7 +1,8 @@
 /**
- * The `monitor_machines` MCP tool is reachable over the streamable HTTP
- * transport, not only over a local stdio pipe, so its verbose response must not
- * hand back the operator's SSH private-key path.
+ * The `monitor_machines` and `monitor_search` MCP tools are reachable over the
+ * streamable HTTP transport, not only over a local stdio pipe, so neither may
+ * hand back the operator's SSH private-key path. `monitor_search` returns the
+ * whole `machines` row, so it is the same disclosure by another route.
  *
  * The DB singleton is pointed at a scratch file before the machine is seeded.
  */
@@ -43,7 +44,7 @@ afterAll(() => {
   }
 });
 
-async function callMachines(args: Record<string, unknown>): Promise<string> {
+async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const server = buildServer();
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -51,12 +52,16 @@ async function callMachines(args: Record<string, unknown>): Promise<string> {
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(clientTransport);
 
-  const result = await client.callTool({ name: "monitor_machines", arguments: args });
+  const result = await client.callTool({ name, arguments: args });
   const text = (result.content as Array<{ type: string; text?: string }>)[0]?.text ?? "";
 
   await client.close();
   await server.close();
   return text;
+}
+
+function callMachines(args: Record<string, unknown>): Promise<string> {
+  return callTool("monitor_machines", args);
 }
 
 describe("monitor_machines", () => {
@@ -73,5 +78,27 @@ describe("monitor_machines", () => {
 
     expect(text).not.toContain(KEY_PATH);
     expect(text).not.toContain("ssh_key_path");
+  });
+});
+
+describe("monitor_search", () => {
+  test("redacts ssh_key_path from a machines hit", async () => {
+    const text = await callTool("monitor_search", {
+      query: "MCP SSH Leak",
+      tables: ["machines"],
+      verbose: true,
+    });
+
+    expect(text).not.toContain(KEY_PATH);
+
+    const payload = JSON.parse(text) as {
+      results: Array<{ table: string; row: Record<string, unknown> }>;
+    };
+    const hit = payload.results.find((result) => result.row["id"] === "mcp-ssh-leak");
+
+    expect(hit).toBeDefined();
+    expect(hit?.table).toBe("machines");
+    expect(hit?.row["ssh_key_path"]).toBe("***");
+    expect(hit?.row["host"]).toBe("build.example.test");
   });
 });

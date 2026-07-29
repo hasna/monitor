@@ -528,6 +528,51 @@ describe("sanitizeSearchResult", () => {
     expect(sanitized.snippet).toBe("node app --api-key ***");
     expect(sanitized.row["cmd"]).toBe("node app --api-key ***");
   });
+
+  it("redacts ssh_key_path from a machine search row", () => {
+    const sanitized = sanitizeSearchResult({
+      table: "machines",
+      id: "build-node",
+      rank: -1,
+      snippet: ">>>Build Node<<<",
+      row: {
+        id: "build-node",
+        name: "Build Node",
+        type: "ssh",
+        host: "build.example.test",
+        ssh_key_path: "/home/secretuser/.ssh/id_ed25519_PROD",
+      },
+    });
+
+    expect(JSON.stringify(sanitized)).not.toContain("/home/secretuser/.ssh/id_ed25519_PROD");
+    expect(sanitized.row["ssh_key_path"]).toBe("***");
+    expect(sanitized.row["host"]).toBe("build.example.test");
+  });
+
+  it("leaves a keyless machine search row alone", () => {
+    const sanitized = sanitizeSearchResult({
+      table: "machines",
+      id: "local",
+      rank: -1,
+      snippet: ">>>local<<<",
+      row: { id: "local", name: "local", type: "local", ssh_key_path: null },
+    });
+
+    expect(sanitized.row["ssh_key_path"]).toBeNull();
+  });
+
+  it("passes alert search rows through untouched", () => {
+    const row = { id: 7, machine_id: "build-node", message: "disk above 90%" };
+    const sanitized = sanitizeSearchResult({
+      table: "alerts",
+      id: 7,
+      rank: -1,
+      snippet: "disk above >>>90%<<<",
+      row,
+    });
+
+    expect(sanitized.row).toEqual(row);
+  });
 });
 
 describe("sanitizeMachineRow", () => {

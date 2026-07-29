@@ -56,11 +56,12 @@ Unknown routes return `404`; unsupported methods return the route miss response.
 Validation errors use status `400` and include field-level details. Protected
 routes return `401` with a Bearer challenge when authorization fails.
 
-The two machine read routes are unauthenticated, so credential-bearing fields
-are redacted before they are serialized: `ssh_key_path` comes back as `***`
+The machine read routes are unauthenticated, so credential-bearing fields are
+redacted before they are serialized: `ssh_key_path` comes back as `***`
 whenever a key is configured (and `null` when one is not), and the
 config-sourced fallback used when the database cannot be opened redacts both
-`ssh.privateKeyPath` and `ssh.password`. See
+`ssh.privateKeyPath` and `ssh.password`. `GET /api/search` returns the whole
+source row, so a `machines` hit is redacted the same way. See
 [docs/security.md](security.md#ssh-key-handling).
 
 ## Query Parameters
