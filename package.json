@@ -21,6 +21,7 @@
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features --external @aws-sdk/* --external node-ssh --external ssh2 --external node-cron",
     "postinstall": "mkdir -p $HOME/.hasna/monitor 2>/dev/null || true",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
     "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
