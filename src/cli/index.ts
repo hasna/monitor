@@ -412,6 +412,12 @@ program
 
 // ── monitor health ────────────────────────────────────────────────────────────
 
+const HEALTH_EXIT_CODES = {
+  ok: 0,
+  warn: 1,
+  critical: 2,
+} as const;
+
 program
   .command("health")
   .description("Show metadata-only monitor health counts")
@@ -419,6 +425,7 @@ program
   .option("--probe-services", "Probe managed services and include status counts", false)
   .action(async (opts: { json?: boolean; probeServices?: boolean }) => {
     const status = await getMonitorStatus({ probeServices: opts.probeServices === true });
+    process.exitCode = HEALTH_EXIT_CODES[status.health.status];
 
     if (opts.json) {
       console.log(JSON.stringify(status, null, 2));
