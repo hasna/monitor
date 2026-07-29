@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0.0",
+  "package": {
+    "name": "@hasna/monitor",
+    "kind": "cli",
+    "runtime": "bun"
+  },
+  "commands": {
+    "build": "bun run build",
+    "test": "bun test",
+    "typecheck": "bun run lint"
+  },
+  "published_artifact_gate": {
+    "script": "artifact-scan",
+    "lifecycle": "prepack"
+  },
+  "storage": {
+    "type": "local",
+    "paths": [
+      "~/.hasna/monitor"
+    ],
+    "waiver": {
+      "reason": "The monitor intentionally persists user-owned configuration and SQLite state for local system monitoring."
+    }
+  }
+}
