@@ -3,7 +3,7 @@
  * We stub systeminformation calls to avoid real system I/O in tests.
  */
 
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, mock, afterAll, spyOn } from "bun:test";
 
 // ── Stub systeminformation before importing LocalCollector ────────────────────
 
@@ -74,17 +74,6 @@ mock.module("systeminformation", () => ({
   },
 }));
 
-mock.module("./command.js", () => ({
-  runLocalShellCommand: async () => ({
-    ok: true,
-    stdout: fakePsOutput,
-    stderr: "",
-    exitCode: 0,
-    durationMs: 1,
-    timedOut: false,
-  }),
-}));
-
 // Also mock os.loadavg
 mock.module("os", () => {
   const actual = require("os");
@@ -95,6 +84,19 @@ mock.module("os", () => {
 });
 
 import { LocalCollector } from "./local";
+
+const runCommandSpy = spyOn(LocalCollector.prototype, "runCommand").mockResolvedValue({
+  ok: true,
+  stdout: fakePsOutput,
+  stderr: "",
+  exitCode: 0,
+  durationMs: 1,
+  timedOut: false,
+});
+
+afterAll(() => {
+  runCommandSpy.mockRestore();
+});
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
