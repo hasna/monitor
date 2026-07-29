@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function runHealth(configDir: string) {
-  const env = { ...process.env, MONITOR_CONFIG_DIR: configDir };
+  const env: NodeJS.ProcessEnv = { ...process.env, MONITOR_CONFIG_DIR: configDir };
   delete env["MONITOR_DATABASE_URL"];
   delete env["MONITOR_S3_BUCKET"];
   delete env["MONITOR_S3_PREFIX"];
