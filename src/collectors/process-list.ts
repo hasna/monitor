@@ -1,7 +1,7 @@
 import type { ProcessInfo } from "./local.js";
 
 export const PROCESS_LIST_COMMAND =
-  "ps -eo pid=,ppid=,user=,stat=,%cpu=,rss=,etimes=,comm=,args=";
+  "ps -eo pid=,ppid=,user:32=,stat=,%cpu=,rss=,etimes=,comm=,args=";
 
 export function parseProcessListOutput(output: string): ProcessInfo[] {
   const processes = output
