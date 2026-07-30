@@ -69,6 +69,8 @@ export interface IntegrationsConfig {
 
 export interface MonitorConfig {
   machines: MachineConfig[];
+  /** Short aliases for configured machine IDs */
+  aliases?: Record<string, string>;
   thresholds?: AlertThresholds;
   /** Path to SQLite database file */
   dbPath?: string;
@@ -181,6 +183,7 @@ const IntegrationsConfigZSchema = z.object({
 
 export const MonitorConfigSchema = z.object({
   machines: z.array(MachineConfigZSchema),
+  aliases: z.record(z.string().min(1), z.string().min(1)).optional(),
   thresholds: AlertThresholdsZSchema.optional(),
   dbPath: z.string().min(1).optional(),
   apiPort: z.number().int().min(1).max(65535).optional(),
