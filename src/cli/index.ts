@@ -15,7 +15,7 @@ import {
   getCronJob,
   updateCronJob,
 } from "../db/queries.js";
-import type { AlertRow } from "../db/schema.js";
+import type { AlertRow, ProcessRow } from "../db/schema.js";
 import { search } from "../db/search.js";
 import { CronEngine, runJobAction } from "../cron/index.js";
 import { runReportIntegrations } from "../integrations/index.js";
@@ -38,7 +38,7 @@ import {
   upsertMonitorLoopCheckTasks,
   type MonitorLoopCheckResult,
 } from "../loop-check.js";
-import type { KillSignal } from "../process-manager/index.js";
+import type { KillSignal, ProcessAction, ProcessReport } from "../process-manager/index.js";
 import {
   buildFleetHealthReport,
   formatFleetHealthReportSummary,
@@ -130,6 +130,30 @@ function parsePositiveInteger(value: string): number {
     throw new InvalidOptionArgumentError("value must be a positive integer");
   }
   return parsed;
+}
+
+type ProcessFilter = "all" | "zombies" | "orphans" | "high_mem";
+
+function parseProcessFilter(value: string): ProcessFilter {
+  if (value === "all" || value === "zombies" || value === "orphans" || value === "high_mem") {
+    return value;
+  }
+  throw new InvalidOptionArgumentError("filter must be 'all', 'zombies', 'orphans', or 'high_mem'");
+}
+
+function parsePidListOption(value: string): number[] {
+  const values = value.split(",").map((entry) => entry.trim());
+  if (values.length === 0 || values.some((entry) => !/^\d+$/.test(entry))) {
+    throw new InvalidOptionArgumentError("PIDs must be a comma-separated list of integers");
+  }
+  return [...new Set(values.map((entry) => Number.parseInt(entry, 10)))];
+}
+
+function selectProcesses(rows: ProcessRow[], filter: ProcessFilter, report: ProcessReport): ProcessRow[] {
+  if (filter === "all") return rows;
+  if (filter === "zombies") return report.zombies;
+  if (filter === "orphans") return report.orphans;
+  return report.highMem;
 }
 
 function collectOption(value: string, previous: string[] = []): string[] {
@@ -624,7 +648,7 @@ program
   .option("-n, --limit <n>", "Number of processes to show", parseLimitOption, DEFAULT_LIST_LIMIT)
   .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
   .option("-s, --sort <by>", "Sort by: cpu | mem", "cpu")
-  .option("-f, --filter <f>", "Filter: all | zombies | orphans | high_mem", "all")
+  .option("-f, --filter <f>", "Filter: all | zombies | orphans | high_mem", parseProcessFilter, "all")
   .option("-v, --verbose", "Include truncated command lines")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
@@ -643,18 +667,7 @@ program
     );
     const report = pm.analyse(allRows);
 
-    let rows = allRows;
-    switch (opts.filter) {
-      case "zombies":
-        rows = report.zombies;
-        break;
-      case "orphans":
-        rows = report.orphans;
-        break;
-      case "high_mem":
-        rows = report.highMem;
-        break;
-    }
+    let rows = selectProcesses(allRows, opts.filter, report);
 
     const sortBy = opts.sort as "cpu" | "mem";
     rows = [...rows].sort((a, b) =>
@@ -942,40 +955,83 @@ program
     if (!result.ok) process.exit(1);
   });
 
-// ── monitor kill <pid> ────────────────────────────────────────────────────────
+// ── monitor kill [pid] ────────────────────────────────────────────────────────
 
 program
-  .command("kill <pid>")
-  .description("Kill a process by PID")
+  .command("kill [pid]")
+  .description("Kill one or more processes by PID or process filter")
   .option("-m, --machine <id>", "Machine ID", "local")
   .option("-f, --force", "Use SIGKILL instead of SIGTERM")
+  .option("--pids <pids>", "Comma-separated process IDs", parsePidListOption)
+  .option("--filter <filter>", "Filter: all | zombies | orphans | high_mem", parseProcessFilter)
   .option("--dry-run", "Print what would happen without executing")
-  .action(async (pidStr: string, opts) => {
-    const pid = parseInt(pidStr, 10);
-    if (isNaN(pid)) {
-      console.error(chalk.red("  Invalid PID"));
+  .option("-j, --json", "Output raw JSON")
+  .action(async (pidStr: string | undefined, opts) => {
+    const selectors = [pidStr !== undefined, opts.pids !== undefined, opts.filter !== undefined];
+    if (selectors.filter(Boolean).length !== 1) {
+      console.error(chalk.red("  Specify exactly one of <pid>, --pids, or --filter"));
       process.exit(1);
     }
 
     const machineId = opts.machine ?? "local";
     const signal: KillSignal = opts.force ? "SIGKILL" : "SIGTERM";
+    const isBatch = opts.pids !== undefined || opts.filter !== undefined;
+    let pids: number[];
 
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`  [dry-run] Would send ${signal} to PID ${pid} on ${machineId}`));
-      return;
-    }
-
-    const pm = new ProcessManager();
-    const action = await pm.kill(pid, signal, machineId);
-
-    if (action.action === "killed") {
-      console.log(chalk.green(`  Killed PID ${pid} — ${action.reason}`));
-    } else if (action.action === "error") {
-      console.error(chalk.red(`  Failed to kill PID ${pid}: ${action.error}`));
-      process.exit(1);
+    if (pidStr !== undefined) {
+      const pid = Number.parseInt(pidStr, 10);
+      if (Number.isNaN(pid)) {
+        console.error(chalk.red("  Invalid PID"));
+        process.exit(1);
+      }
+      pids = [pid];
+    } else if (opts.pids !== undefined) {
+      pids = opts.pids;
     } else {
-      console.log(chalk.yellow(`  Skipped PID ${pid} — ${action.reason}`));
+      const collector = getCollectorForMachine(machineId);
+      const result = await collector.collect();
+      if (!result.ok) {
+        console.error(chalk.red(`Error: ${result.error}`));
+        process.exit(1);
+      }
+      const pm = new ProcessManager();
+      const rows = result.snapshot.processes.map((process) => processInfoToRow(process, machineId));
+      const report = pm.analyse(rows);
+      pids = selectProcesses(rows, opts.filter, report).map((process) => process.pid);
     }
+
+    const actions: ProcessAction[] = [];
+    const pm = new ProcessManager();
+    for (const pid of pids) {
+      if (opts.dryRun) {
+        actions.push({
+          pid,
+          name: `pid:${pid}`,
+          action: "skipped" as const,
+          reason: `dry-run: would send ${signal} on ${machineId}`,
+        });
+      } else {
+        actions.push(await pm.kill(pid, signal, machineId));
+      }
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(isBatch ? actions : actions[0], null, 2));
+    } else {
+      for (const action of actions) {
+        if (opts.dryRun) {
+          console.log(chalk.yellow(`  [dry-run] Would send ${signal} to PID ${action.pid} on ${machineId}`));
+        } else if (action.action === "killed") {
+          console.log(chalk.green(`  Killed PID ${action.pid} — ${action.reason}`));
+        } else if (action.action === "error") {
+          console.error(chalk.red(`  Failed to kill PID ${action.pid}: ${action.error ?? action.reason}`));
+        } else {
+          console.log(chalk.yellow(`  Skipped PID ${action.pid} — ${action.reason}`));
+        }
+      }
+    }
+
+    if (actions.some((action) => action.action === "error")) process.exit(1);
   });
 
 // ── monitor alerts [machine] ──────────────────────────────────────────────────

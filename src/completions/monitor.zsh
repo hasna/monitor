@@ -112,8 +112,11 @@ _monitor() {
           _arguments \
             '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
             '(-f --force)'[Use SIGKILL instead of SIGTERM] \
+            '--pids[Comma-separated process IDs]:pids:' \
+            '--filter[Filter]:filter:(all zombies orphans high_mem)' \
             '--dry-run[Print what would happen without executing]' \
-            '1:pid:'
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::pid:'
           ;;
         alerts)
           _arguments \
