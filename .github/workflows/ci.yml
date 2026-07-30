@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run lint
+
+      # The gates run before the suite deliberately. They were all green-boarded
+      # before this job existed, and one red test must not be able to skip them:
+      # with `bun test` first, a single pre-existing failure meant none of the
+      # gates this workflow exists to add ever ran.
+      #
+      # They are three separate failures. contract-gate catches a manifest or
+      # gate wiring that is wrong; contract-baseline runs the authoritative
+      # `contracts repo-conformance` and catches any conformance drift past the
+      # baseline the manifest declares; Pack catches a prepack that makes the
+      # package unpublishable.
+      - name: Contract gate
+        run: bun run contract-gate
+
+      - name: Conformance baseline
+        run: bun run contract-baseline
+
+      - name: Pack
+        run: npm pack --dry-run
+
+      - name: Test
+        run: bun test

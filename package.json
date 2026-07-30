@@ -4,6 +4,14 @@
   "description": "System monitoring tool for multiple computers — local, SSH, EC2",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/open-monitor.git"
+  },
+  "homepage": "https://github.com/hasna/open-monitor#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/open-monitor/issues"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
     "access": "public"
@@ -19,6 +27,11 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features --external @aws-sdk/* --external node-ssh --external ssh2 --external node-cron",
+    "contract-check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
+    "contract-baseline": "bun scripts/contract-baseline.ts",
+    "contract-gate": "bun scripts/contract-gate.ts --online",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
+    "prepack": "bun run scan:artifact",
     "postinstall": "mkdir -p $HOME/.hasna/monitor 2>/dev/null || true",
     "test": "bun test",
     "lint": "bunx tsc --noEmit",
