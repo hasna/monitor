@@ -68,6 +68,15 @@
       ]
     },
     "contractAlignment": {
+      "conformanceBaseline": {
+        "reason": "The two pending bin renames below are owner-blocked breaking changes, so `bun run contract-check` still fails one check. This baseline is what `bun run contract-baseline` holds the authority to in CI: exactly these failures pass, anything else — a new failure, a changed detail, or a baseline entry that stops failing — breaks the build. Remove an entry as soon as its cause is resolved.",
+        "failures": [
+          {
+            "check": "bins_match_package",
+            "detail": "in package.json but undeclared: monitor-server, monitor-web"
+          }
+        ]
+      },
       "pendingBinRenames": [
         {
           "bin": "monitor-server",
