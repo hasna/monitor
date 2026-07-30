@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -40,6 +40,18 @@ function runIsolatedBunScript(script: string, env: NodeJS.ProcessEnv): unknown {
   const stdout = result.stdout.trim().split(/\r?\n/).at(-1);
   expect(stdout).toBeDefined();
   return JSON.parse(stdout!);
+}
+
+function runConfigCli(args: string[], env: NodeJS.ProcessEnv = process.env) {
+  return spawnSync(
+    "bun",
+    [join(import.meta.dir, "..", "bins", "monitor.ts"), "config", ...args],
+    {
+      cwd: process.cwd(),
+      env,
+      encoding: "utf-8",
+    }
+  );
 }
 
 describe("loadConfig()", () => {
@@ -305,5 +317,80 @@ describe("saveConfig() + loadConfig() round-trip", () => {
     saveConfig(config);
     const reloaded = loadConfig();
     expect(reloaded.thresholds).toEqual(config.thresholds);
+  });
+});
+
+describe("monitor config commands", () => {
+  it("opens the config path with EDITOR and emits JSON", () => {
+    const editorPath = join(configDir, "editor.sh");
+    const markerPath = join(configDir, "edited-path.txt");
+    writeFileSync(editorPath, '#!/bin/sh\nprintf "%s" "$1" > "$MONITOR_EDITOR_MARKER"\n', "utf-8");
+    chmodSync(editorPath, 0o755);
+
+    const result = runConfigCli(["edit", "--json"], {
+      ...process.env,
+      EDITOR: editorPath,
+      MONITOR_EDITOR_MARKER: markerPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      edited: true,
+      path: join(configDir, "config.json"),
+      editor: editorPath,
+    });
+    expect(readFileSync(markerPath, "utf-8")).toBe(join(configDir, "config.json"));
+  });
+
+  it("validates config JSON and exits non-zero for schema errors", () => {
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ machines: [{ id: "local", label: "Local", type: "local" }] }),
+      "utf-8"
+    );
+
+    const validResult = runConfigCli(["validate", "--json"]);
+    expect(validResult.status).toBe(0);
+    expect(JSON.parse(validResult.stdout)).toEqual({
+      valid: true,
+      path: join(configDir, "config.json"),
+    });
+
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({ machines: "invalid" }), "utf-8");
+    const invalidResult = runConfigCli(["validate", "--json"]);
+    expect(invalidResult.status).toBe(1);
+    expect(JSON.parse(invalidResult.stdout)).toEqual({
+      valid: false,
+      path: join(configDir, "config.json"),
+      error: expect.stringContaining("Invalid monitor config"),
+    });
+  });
+
+  it("creates a timestamped backup and restores the newest backup", () => {
+    const configPath = join(configDir, "config.json");
+    const original = {
+      machines: [{ id: "original", label: "Original", type: "local" }],
+    };
+    writeFileSync(configPath, JSON.stringify(original), "utf-8");
+
+    const backupResult = runConfigCli(["backup", "--json"]);
+    expect(backupResult.status).toBe(0);
+    const backupOutput = JSON.parse(backupResult.stdout) as { path: string; backup: string };
+    expect(backupOutput.path).toBe(configPath);
+    expect(backupOutput.backup).toMatch(/config\.json\.\d{8}T\d{9}Z\.bak$/);
+    expect(readFileSync(backupOutput.backup, "utf-8")).toBe(JSON.stringify(original));
+
+    writeFileSync(
+      configPath,
+      JSON.stringify({ machines: [{ id: "changed", label: "Changed", type: "local" }] }),
+      "utf-8"
+    );
+    const restoreResult = runConfigCli(["restore", "--json"]);
+    expect(restoreResult.status).toBe(0);
+    expect(JSON.parse(restoreResult.stdout)).toEqual({
+      path: configPath,
+      backup: backupOutput.backup,
+    });
+    expect(JSON.parse(readFileSync(configPath, "utf-8"))).toEqual(original);
   });
 });
