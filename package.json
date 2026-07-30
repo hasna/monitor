@@ -34,6 +34,7 @@
     "prepack": "bun run scan:artifact",
     "postinstall": "mkdir -p $HOME/.hasna/monitor 2>/dev/null || true",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
     "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
