@@ -51,12 +51,16 @@ describe("runLocalShellCommand", () => {
     expect(elapsedMs).toBeLessThan(2_000);
   });
 
-  it("does not report a timeout for a command that exits before the deadline", async () => {
-    // The negative control for the test above. Without it, "exited 0 straight
-    // away" and "killed on the deadline" are not pinned as distinct outcomes —
-    // and collapsing those two is exactly what hid the failure before.
-    const result = await runLocalShellCommand("exit 0", { timeoutMs: 30_000 });
+  it("returns the command's own output, so a leaked module stub cannot pass as real", async () => {
+    // Doubles as the negative control for the timeout test — "exited before the
+    // deadline" and "killed on the deadline" have to be distinct outcomes — and
+    // as a tripwire. src/collectors/local.test.ts stubs this same "./command.js"
+    // through `mock.module`, which is process-wide; when that stub reached this
+    // file it satisfied every ok/exitCode assertion while never running a shell.
+    // Asserting on stdout is what a canned stub cannot fake.
+    const result = await runLocalShellCommand("printf 'real shell'", { timeoutMs: 30_000 });
 
+    expect(result.stdout).toBe("real shell");
     expect(result.timedOut).toBe(false);
     expect(result.ok).toBe(true);
     expect(result.exitCode).toBe(0);
