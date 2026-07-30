@@ -1,26 +1,85 @@
 {
-  "schema_version": "1.0.0",
-  "package": {
-    "name": "@hasna/monitor",
-    "kind": "cli",
-    "runtime": "bun"
-  },
-  "commands": {
-    "build": "bun run build",
-    "test": "bun test",
-    "typecheck": "bun run lint"
-  },
-  "published_artifact_gate": {
-    "script": "artifact-scan",
-    "lifecycle": "prepack"
-  },
+  "schema": "hasna.service_contract.v1",
+  "name": "monitor",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "System monitoring tool for multiple computers — local, SSH, EC2.",
+  "bins": [
+    "monitor",
+    "monitor-mcp"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "monitor",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "monitor-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "monitor-server serves a local REST/SSE surface today, but it declares neither GET /ready nor GET /version and ships no generated SDK, so it is not yet a contract-supported API surface."
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "No client SDK is generated while the HTTP API surface is deferred; consumers import ./src/index.ts directly."
+    }
+  ],
   "storage": {
-    "type": "local",
-    "paths": [
-      "~/.hasna/monitor"
+    "mode": "sqlite",
+    "engines": [
+      "sqlite"
     ],
-    "waiver": {
-      "reason": "The monitor intentionally persists user-owned configuration and SQLite state for local system monitoring."
+    "envPrefix": "HASNA_MONITOR_",
+    "aliasEnvPrefix": "MONITOR_",
+    "sqlitePath": "~/.hasna/monitor/monitor.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "src/db/postgres-adapter.ts exists but cannot serve traffic: its runSync helper busy-waits with Bun.sleepSync, which blocks the event loop the pending query needs, so every call times out after 30s. Declaring postgres as a supported engine would be false until that adapter is rewritten async-first.",
+          "reviewedBy": "platform-storage",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    },
+    "contractAlignment": {
+      "pendingBinRenames": [
+        {
+          "bin": "monitor-server",
+          "replacement": "monitor serve",
+          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, so it cannot be declared above. The allowlisted equivalent already exists as the `monitor serve` subcommand; dropping the standalone bin is a breaking change to a published package and needs an owner decision."
+        },
+        {
+          "bin": "monitor-web",
+          "replacement": "monitor web (subcommand not implemented yet)",
+          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, and no allowlisted bin name fits a dashboard dev server. Replacing it needs a new `monitor web` subcommand plus an owner decision on the breaking change."
+        }
+      ]
     }
   }
 }
