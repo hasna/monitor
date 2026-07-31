@@ -249,6 +249,22 @@ function parseCursorOption(value: string): number {
   }
 }
 
+function parsePercentThresholdOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "threshold", 0, 100);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function parseLoadThresholdOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "threshold", 0, Number.MAX_SAFE_INTEGER);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function printPageHint<T>(
   page: Page<T>,
   detailHint: string,
@@ -547,11 +563,21 @@ program
   .description("Run health checks and show colored report")
   .option("-n, --limit <n>", "Number of detail rows to show in each section", parseLimitOption, DEFAULT_LIST_LIMIT)
   .option("--cursor <n>", "Zero-based row offset for detail sections", parseCursorOption, 0)
+  .option("--cpu-threshold <n>", "CPU usage warning threshold percent", parsePercentThresholdOption)
+  .option("--mem-threshold <n>", "Memory usage warning threshold percent", parsePercentThresholdOption)
+  .option("--disk-threshold <n>", "Disk usage warning threshold percent", parsePercentThresholdOption)
+  .option("--load-threshold <n>", "Load average warning threshold", parseLoadThresholdOption)
   .option("-v, --verbose", "Show full diagnostic messages and detail rows")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
-    const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => {
+    const configuredThresholds = loadConfig().thresholds;
+    const diagnostics = await collectMachineDiagnostics(machineId, {
+      cpuWarn: opts.cpuThreshold ?? configuredThresholds?.cpuPercent,
+      memWarn: opts.memThreshold ?? configuredThresholds?.memPercent,
+      diskWarn: opts.diskThreshold ?? configuredThresholds?.diskPercent,
+      loadAvgWarn: opts.loadThreshold ?? configuredThresholds?.loadAvg,
+    }).catch((error) => {
       console.error(chalk.red(`Error: ${error}`));
       process.exit(1);
     });
