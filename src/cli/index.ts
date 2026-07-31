@@ -2,6 +2,7 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
+import type { SystemSnapshot } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig, saveConfig, migrateConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
@@ -86,11 +87,28 @@ function progressBar(pct: number, width = 20): string {
   return chalk.green(bar);
 }
 
+function colorPct(pct: number, value: string): string {
+  if (pct >= 95) return chalk.red(value);
+  if (pct >= 80) return chalk.yellow(value);
+  return chalk.green(value);
+}
+
 function formatPct(pct: number): string {
-  const s = pct.toFixed(1).padStart(5) + "%";
-  if (pct >= 95) return chalk.red(s);
-  if (pct >= 80) return chalk.yellow(s);
-  return chalk.green(s);
+  return colorPct(pct, pct.toFixed(1).padStart(5) + "%");
+}
+
+function formatCompactPct(pct: number): string {
+  const value = `${Math.round(pct)}%`;
+  return process.stdout.isTTY ? colorPct(pct, value) : value;
+}
+
+export function formatCompactStatus(snapshot: SystemSnapshot): string {
+  const disk = snapshot.disks.find((entry) => entry.mount === "/") ?? snapshot.disks[0];
+  const diskUsage = disk
+    ? formatCompactPct(disk.usagePercent)
+    : process.stdout.isTTY ? chalk.dim("n/a") : "n/a";
+
+  return `cpu ${formatCompactPct(snapshot.cpu.usagePercent)} mem ${formatCompactPct(snapshot.mem.usagePercent)} disk ${diskUsage}`;
 }
 
 function formatUptime(seconds: number): string {
@@ -350,6 +368,7 @@ program
   .command("status [machine]")
   .description("Show current system snapshot (CPU, memory, disk, GPU)")
   .option("-j, --json", "Output raw JSON")
+  .option("--compact", "Output a single-line CPU, memory, and disk summary")
   .action(async (machineArg: string | undefined, opts) => {
     const machineId = machineArg ?? "local";
     const collector = getCollectorForMachine(machineId);
@@ -364,6 +383,11 @@ program
 
     if (opts.json) {
       console.log(JSON.stringify(snap, null, 2));
+      return;
+    }
+
+    if (opts.compact) {
+      console.log(formatCompactStatus(snap));
       return;
     }
 
