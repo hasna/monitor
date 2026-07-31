@@ -14,6 +14,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Duplicate keys are VALID JSON and every parser silently keeps the last
+      # occurrence, so a stray pasted line throws nothing, renders a clean diff,
+      # and passes review + PR CI. One reached main on 2026-07-31 (PR #14) and
+      # the first signal anywhere was a publish being refused: bun prints
+      # `warn: Duplicate key ...` to STDERR, which broke a test asserting stderr
+      # is empty. This step moves that detection back to pre-merge.
+      - name: Reject duplicate keys in package.json
+        run: |
+          python3 - <<'PY'
+          import collections, json, sys
+
+          dups = []
+
+          def hook(pairs):
+              counts = collections.Counter(k for k, _ in pairs)
+              dups.extend(k for k, n in counts.items() if n > 1)
+              return dict(pairs)
+
+          json.load(open("package.json"), object_pairs_hook=hook)
+          if dups:
+              sys.exit("duplicate keys in package.json: " + ", ".join(sorted(set(dups))))
+          print("package.json: no duplicate keys")
+          PY
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest

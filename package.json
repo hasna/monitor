@@ -27,7 +27,6 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features --external @aws-sdk/* --external node-ssh --external ssh2 --external node-cron",
-    "typecheck": "tsc --noEmit",
     "contract-check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
     "contract-baseline": "bun scripts/contract-baseline.ts",
     "contract-gate": "bun scripts/contract-gate.ts --online",
