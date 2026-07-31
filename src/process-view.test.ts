@@ -1,9 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { userInfo } from "node:os";
 import { join } from "node:path";
 import type { ProcessRow } from "./db/schema.js";
 import { buildProcessTree, filterProcessRows, matchesProcessName } from "./process-view.js";
+
+function currentProcessOwner(): string {
+  const child = spawnSync("id", ["-un"], { encoding: "utf8", timeout: 5_000 });
+  const username = child.status === 0 ? child.stdout.trim() : "";
+  if (!username) {
+    throw new Error(`Unable to resolve current process owner: ${child.stderr || child.error?.message || "empty username"}`);
+  }
+  return username;
+}
 
 function makeProcess(overrides: Partial<ProcessRow> = {}): ProcessRow {
   return {
@@ -67,7 +75,7 @@ describe("process tree", () => {
 
 describe("monitor ps CLI", () => {
   it("accepts owner, substring-name, and tree filters without changing JSON shape", () => {
-    const username = userInfo().username;
+    const username = currentProcessOwner();
     const child = spawnSync(
       process.execPath,
       [
