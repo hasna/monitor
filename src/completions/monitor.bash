@@ -148,8 +148,19 @@ _monitor() {
       return
       ;;
 
-    --filter|-f)
-      COMPREPLY=($(compgen -W "all zombies orphans high_mem" -- "$cur"))
+    --filter)
+      if [[ "${words[1]}" == "kill" ]]; then
+        COMPREPLY=($(compgen -W "zombies orphans high_mem" -- "$cur"))
+      else
+        COMPREPLY=($(compgen -W "all zombies orphans high_mem" -- "$cur"))
+      fi
+      return
+      ;;
+
+    -f)
+      if [[ "${words[1]}" != "kill" ]]; then
+        COMPREPLY=($(compgen -W "all zombies orphans high_mem" -- "$cur"))
+      fi
       return
       ;;
 

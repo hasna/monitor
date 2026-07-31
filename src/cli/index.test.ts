@@ -74,4 +74,18 @@ describe("monitor kill batch operations", () => {
     expect(child.status).toBe(1);
     expect(child.stdout).toBe("");
   });
+
+  it("rejects all-process filter kills", () => {
+    const child = runMonitor([
+      "kill",
+      "--filter",
+      "all",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(child.status).toBe(1);
+    expect(child.stdout).toBe("");
+    expect(child.stderr).toContain("kill filter must be 'zombies', 'orphans', or 'high_mem'");
+  });
 });

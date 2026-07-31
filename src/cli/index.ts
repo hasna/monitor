@@ -133,12 +133,20 @@ function parsePositiveInteger(value: string): number {
 }
 
 type ProcessFilter = "all" | "zombies" | "orphans" | "high_mem";
+type KillProcessFilter = Exclude<ProcessFilter, "all">;
 
 function parseProcessFilter(value: string): ProcessFilter {
   if (value === "all" || value === "zombies" || value === "orphans" || value === "high_mem") {
     return value;
   }
   throw new InvalidOptionArgumentError("filter must be 'all', 'zombies', 'orphans', or 'high_mem'");
+}
+
+function parseKillProcessFilter(value: string): KillProcessFilter {
+  if (value === "zombies" || value === "orphans" || value === "high_mem") {
+    return value;
+  }
+  throw new InvalidOptionArgumentError("kill filter must be 'zombies', 'orphans', or 'high_mem'");
 }
 
 function parsePidListOption(value: string): number[] {
@@ -963,7 +971,7 @@ program
   .option("-m, --machine <id>", "Machine ID", "local")
   .option("-f, --force", "Use SIGKILL instead of SIGTERM")
   .option("--pids <pids>", "Comma-separated process IDs", parsePidListOption)
-  .option("--filter <filter>", "Filter: all | zombies | orphans | high_mem", parseProcessFilter)
+  .option("--filter <filter>", "Filter: zombies | orphans | high_mem", parseKillProcessFilter)
   .option("--dry-run", "Print what would happen without executing")
   .option("-j, --json", "Output raw JSON")
   .action(async (pidStr: string | undefined, opts) => {
