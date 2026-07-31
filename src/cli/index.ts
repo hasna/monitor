@@ -3,6 +3,7 @@ import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { createInterface } from "node:readline/promises";
 import { getCollectorForMachine, listKnownMachineIds, LocalCollector } from "../collectors/index.js";
+import type { SystemSnapshot } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import { loadConfig, saveConfig, migrateConfig } from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
@@ -87,11 +88,28 @@ function progressBar(pct: number, width = 20): string {
   return chalk.green(bar);
 }
 
+function colorPct(pct: number, value: string): string {
+  if (pct >= 95) return chalk.red(value);
+  if (pct >= 80) return chalk.yellow(value);
+  return chalk.green(value);
+}
+
 function formatPct(pct: number): string {
-  const s = pct.toFixed(1).padStart(5) + "%";
-  if (pct >= 95) return chalk.red(s);
-  if (pct >= 80) return chalk.yellow(s);
-  return chalk.green(s);
+  return colorPct(pct, pct.toFixed(1).padStart(5) + "%");
+}
+
+function formatCompactPct(pct: number): string {
+  const value = `${Math.round(pct)}%`;
+  return process.stdout.isTTY ? colorPct(pct, value) : value;
+}
+
+export function formatCompactStatus(snapshot: SystemSnapshot): string {
+  const disk = snapshot.disks.find((entry) => entry.mount === "/") ?? snapshot.disks[0];
+  const diskUsage = disk
+    ? formatCompactPct(disk.usagePercent)
+    : process.stdout.isTTY ? chalk.dim("n/a") : "n/a";
+
+  return `cpu ${formatCompactPct(snapshot.cpu.usagePercent)} mem ${formatCompactPct(snapshot.mem.usagePercent)} disk ${diskUsage}`;
 }
 
 function formatUptime(seconds: number): string {
@@ -135,6 +153,24 @@ function parsePositiveInteger(value: string): number {
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+function resolveMachineId(machineId = "local"): string {
+  const config = loadConfig();
+  const aliases = config.aliases ?? {};
+  const resolvedMachineId = Object.hasOwn(aliases, machineId) ? aliases[machineId]! : machineId;
+
+  if (resolvedMachineId === "local" || listKnownMachineIds().includes(resolvedMachineId)) {
+    return resolvedMachineId;
+  }
+
+  if (resolvedMachineId !== machineId) {
+    throw new Error(
+      `Machine alias "${machineId}" points to unknown machine "${resolvedMachineId}"`
+    );
+  }
+
+  throw new Error(`Unknown machine or alias "${machineId}"`);
 }
 
 function evidenceDirFromOptions(opts: { evidence?: boolean; evidenceDir?: string }): string | false | undefined {
@@ -244,6 +280,22 @@ async function confirmProcessKills(message: string): Promise<boolean> {
   }
 }
 
+function parsePercentThresholdOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "threshold", 0, 100);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function parseLoadThresholdOption(value: string): number {
+  try {
+    return parseBoundedInt(value, "threshold", 0, Number.MAX_SAFE_INTEGER);
+  } catch (error) {
+    throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function printPageHint<T>(
   page: Page<T>,
   detailHint: string,
@@ -263,7 +315,7 @@ async function renderInstalledApps(
   const shouldScanAll = Boolean(opts.all || shouldCompare);
   const results = shouldScanAll
     ? await listInstalledAppsAcrossMachines()
-    : [await listInstalledApps(machineArg ?? "local")];
+    : [await listInstalledApps(resolveMachineId(machineArg))];
 
   if (opts.json) {
     console.log(
@@ -363,8 +415,9 @@ program
   .command("status [machine]")
   .description("Show current system snapshot (CPU, memory, disk, GPU)")
   .option("-j, --json", "Output raw JSON")
+  .option("--compact", "Output a single-line CPU, memory, and disk summary")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineId = machineArg ?? "local";
+    const machineId = resolveMachineId(machineArg);
     const collector = getCollectorForMachine(machineId);
     const result = await collector.collect();
 
@@ -377,6 +430,11 @@ program
 
     if (opts.json) {
       console.log(JSON.stringify(snap, null, 2));
+      return;
+    }
+
+    if (opts.compact) {
+      console.log(formatCompactStatus(snap));
       return;
     }
 
@@ -425,6 +483,12 @@ program
 
 // ── monitor health ────────────────────────────────────────────────────────────
 
+const HEALTH_EXIT_CODES = {
+  ok: 0,
+  warn: 1,
+  critical: 2,
+} as const;
+
 program
   .command("health")
   .description("Show metadata-only monitor health counts")
@@ -432,6 +496,7 @@ program
   .option("--probe-services", "Probe managed services and include status counts", false)
   .action(async (opts: { json?: boolean; probeServices?: boolean }) => {
     const status = await getMonitorStatus({ probeServices: opts.probeServices === true });
+    process.exitCode = HEALTH_EXIT_CODES[status.health.status];
 
     if (opts.json) {
       console.log(JSON.stringify(status, null, 2));
@@ -536,11 +601,21 @@ program
   .description("Run health checks and show colored report")
   .option("-n, --limit <n>", "Number of detail rows to show in each section", parseLimitOption, DEFAULT_LIST_LIMIT)
   .option("--cursor <n>", "Zero-based row offset for detail sections", parseCursorOption, 0)
+  .option("--cpu-threshold <n>", "CPU usage warning threshold percent", parsePercentThresholdOption)
+  .option("--mem-threshold <n>", "Memory usage warning threshold percent", parsePercentThresholdOption)
+  .option("--disk-threshold <n>", "Disk usage warning threshold percent", parsePercentThresholdOption)
+  .option("--load-threshold <n>", "Load average warning threshold", parseLoadThresholdOption)
   .option("-v, --verbose", "Show full diagnostic messages and detail rows")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineId = machineArg ?? "local";
-    const diagnostics = await collectMachineDiagnostics(machineId).catch((error) => {
+    const machineId = resolveMachineId(machineArg);
+    const configuredThresholds = loadConfig().thresholds;
+    const diagnostics = await collectMachineDiagnostics(machineId, {
+      cpuWarn: opts.cpuThreshold ?? configuredThresholds?.cpuPercent,
+      memWarn: opts.memThreshold ?? configuredThresholds?.memPercent,
+      diskWarn: opts.diskThreshold ?? configuredThresholds?.diskPercent,
+      loadAvgWarn: opts.loadThreshold ?? configuredThresholds?.loadAvg,
+    }).catch((error) => {
       console.error(chalk.red(`Error: ${error}`));
       process.exit(1);
     });
@@ -641,7 +716,7 @@ program
   .option("-v, --verbose", "Include truncated command lines")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineId = machineArg ?? "local";
+    const machineId = resolveMachineId(machineArg);
     const collector = getCollectorForMachine(machineId);
     const pm = new ProcessManager();
     const result = await collector.collect();
@@ -732,7 +807,7 @@ program
   .option("-v, --verbose", "Show full MCP raw statuses and pane commands")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineIds = opts.all ? listKnownMachineIds() : [machineArg ?? "local"];
+    const machineIds = opts.all ? listKnownMachineIds() : [resolveMachineId(machineArg)];
     const results = await collectRuntimeHealthAcrossMachines(machineIds);
 
     if (opts.json) {
@@ -814,7 +889,7 @@ program
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
       ? await getMcpProcessStatusAcrossMachines()
-      : [await getMcpProcessStatus(machineArg ?? "local")];
+      : [await getMcpProcessStatus(resolveMachineId(machineArg))];
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -860,7 +935,7 @@ program
   .option("-m, --machine <id>", "Machine ID", "local")
   .option("-j, --json", "Output raw JSON")
   .action(async (name: string, opts) => {
-    const result = await restartMcpServer(name, opts.machine ?? "local");
+    const result = await restartMcpServer(name, resolveMachineId(opts.machine));
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -913,7 +988,8 @@ program
       process.exit(1);
     }
 
-    const collector = getCollectorForMachine(opts.machine ?? "local");
+    const machineId = resolveMachineId(opts.machine);
+    const collector = getCollectorForMachine(machineId);
     const result = await executeTmuxCommand(collector, {
       target,
       all: opts.all ?? false,
@@ -924,7 +1000,7 @@ program
 
     if (opts.json) {
       console.log(JSON.stringify({
-        machine_id: opts.machine ?? "local",
+        machine_id: machineId,
         ...result,
       }, null, 2));
       if (!result.ok) process.exit(1);
@@ -933,7 +1009,7 @@ program
 
     console.log();
     console.log(
-      chalk.bold(`  Machine: ${opts.machine ?? "local"}`) +
+      chalk.bold(`  Machine: ${machineId}`) +
       chalk.dim(`  |  Mode: ${result.mode}  |  Targets: ${result.target_count}`)
     );
 
@@ -967,7 +1043,6 @@ program
   .option("-y, --yes", "Skip confirmation when multiple processes match")
   .option("-j, --json", "Output raw JSON")
   .action(async (pidStr: string | undefined, opts) => {
-    const machineId = opts.machine ?? "local";
     const signal: KillSignal = opts.force ? "SIGKILL" : "SIGTERM";
 
     const fail = (message: string): never => {
@@ -978,6 +1053,15 @@ program
       }
       process.exit(1);
     };
+
+    let machineId: string;
+    try {
+      machineId = resolveMachineId(opts.machine);
+    } catch (error) {
+      return fail(
+        `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     if ((pidStr && opts.name !== undefined) || (!pidStr && opts.name === undefined)) {
       fail("Specify exactly one of PID or --name <pattern>");
@@ -1137,7 +1221,7 @@ program
   .option("-v, --verbose", "Show full alert messages and timestamps")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
-    const machineId = machineArg;
+    const machineId = machineArg ? resolveMachineId(machineArg) : undefined;
     const unresolvedOnly = !opts.all;
 
     let alerts: AlertRow[];
@@ -1215,7 +1299,7 @@ program
   .option("-v, --verbose", "Show service detail strings")
   .option("-j, --json", "Output raw JSON")
   .action(async (action: string, name: string | undefined, opts) => {
-    const machineId = opts.machine ?? "local";
+    const machineId = resolveMachineId(opts.machine);
 
     if (!["list", "start", "stop", "restart"].includes(action)) {
       console.error(chalk.red("  action must be one of: list, start, stop, restart"));
@@ -1298,7 +1382,7 @@ program
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
       ? await getTemperatureStatusAcrossMachines()
-      : [await getTemperatureStatus(machineArg ?? "local")];
+      : [await getTemperatureStatus(resolveMachineId(machineArg))];
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -1382,7 +1466,7 @@ program
 
     const results = opts.all
       ? await scanListeningPortsAcrossMachines()
-      : [await scanListeningPorts(machineArg ?? "local")];
+      : [await scanListeningPorts(resolveMachineId(machineArg))];
 
     const filtered = results.map((result) => ({
       ...result,
@@ -1435,7 +1519,7 @@ addLoopCheckCommonOptions(
 )
   .action(async (machineArg: string | undefined, opts) => {
     const result = await getListeningPortsLoopCheck({
-      machineId: machineArg ?? "local",
+      machineId: resolveMachineId(machineArg),
       allowed: opts.allow,
       evidenceDir: evidenceDirFromOptions(opts),
       maxEvidenceItems: opts.maxEvidenceItems,
@@ -1458,7 +1542,7 @@ addLoopCheckCommonOptions(
   .action(async (opts) => {
     const result = await getWorkspacePortsLoopCheck({
       workspaceRoot: opts.workspace,
-      machineId: opts.machine,
+      machineId: resolveMachineId(opts.machine),
       maxRepos: opts.maxRepos,
       maxFiles: opts.maxFiles,
       evidenceDir: evidenceDirFromOptions(opts),
@@ -1479,7 +1563,7 @@ addLoopCheckCommonOptions(
 )
   .action(async (machineArg: string | undefined, opts) => {
     const result = await getProcessHygieneLoopCheck({
-      machineId: machineArg ?? "local",
+      machineId: resolveMachineId(machineArg),
       highMemThresholdMb: opts.highMemMb,
       stuckThresholdHours: opts.stuckHours,
       evidenceDir: evidenceDirFromOptions(opts),
@@ -1529,7 +1613,7 @@ program
   .action(async (machineArg: string | undefined, opts) => {
     const results = opts.all
       ? await getTailscaleStatusAcrossMachines()
-      : [await getTailscaleStatus(machineArg ?? "local")];
+      : [await getTailscaleStatus(resolveMachineId(machineArg))];
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -1616,7 +1700,7 @@ program
     }
 
     if (opts.logs) {
-      const result = await getContainerLogs(opts.logs, machineArg ?? "local", tail);
+      const result = await getContainerLogs(opts.logs, resolveMachineId(machineArg), tail);
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
@@ -1650,7 +1734,7 @@ program
 
     const results = opts.all
       ? await listContainersAcrossMachines()
-      : [await listContainers(machineArg ?? "local")];
+      : [await listContainers(resolveMachineId(machineArg))];
 
     if (opts.json) {
       console.log(JSON.stringify(results, null, 2));
@@ -1784,9 +1868,10 @@ cronCmd
   .option("-v, --verbose", "Show action type and command snippets")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
+    const machineId = opts.machine ? resolveMachineId(opts.machine) : undefined;
     let jobs: import("../db/schema.js").CronJobRow[] = [];
     try {
-      jobs = listCronJobs(opts.machine);
+      jobs = listCronJobs(machineId);
     } catch {
       jobs = [];
     }
@@ -1823,7 +1908,7 @@ cronCmd
   .action((name: string, schedule: string, command: string, opts) => {
     try {
       const id = insertCronJob({
-        machine_id: opts.machine ?? null,
+        machine_id: opts.machine ? resolveMachineId(opts.machine) : null,
         name,
         schedule,
         command,

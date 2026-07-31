@@ -1,0 +1,94 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "monitor",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.8.5",
+  "description": "System monitoring tool for multiple computers — local, SSH, EC2.",
+  "bins": [
+    "monitor",
+    "monitor-mcp"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "monitor",
+      "authMode": "local-only"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "monitor-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "monitor-server serves a local REST/SSE surface today, but it declares neither GET /ready nor GET /version and ships no generated SDK, so it is not yet a contract-supported API surface."
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "deferred",
+      "authMode": "api-key",
+      "deferReason": "No client SDK is generated while the HTTP API surface is deferred; consumers import ./src/index.ts directly."
+    }
+  ],
+  "storage": {
+    "mode": "sqlite",
+    "engines": [
+      "sqlite"
+    ],
+    "envPrefix": "HASNA_MONITOR_",
+    "aliasEnvPrefix": "MONITOR_",
+    "sqlitePath": "~/.hasna/monitor/monitor.db"
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "conformance": {
+      "waivedStorageEngines": [
+        {
+          "engine": "postgres",
+          "reason": "src/db/postgres-adapter.ts exists but cannot serve traffic: its runSync helper busy-waits with Bun.sleepSync, which blocks the event loop the pending query needs, so every call times out after 30s. Declaring postgres as a supported engine would be false until that adapter is rewritten async-first.",
+          "reviewedBy": "platform-storage",
+          "expiresAt": "2027-01-01T00:00:00.000Z"
+        }
+      ]
+    },
+    "contractAlignment": {
+      "conformanceBaseline": {
+        "reason": "The two pending bin renames below are owner-blocked breaking changes, so `bun run contract-check` still fails one check. This baseline is what `bun run contract-baseline` holds the authority to in CI: exactly these failures pass, anything else — a new failure, a changed detail, or a baseline entry that stops failing — breaks the build. Remove an entry as soon as its cause is resolved.",
+        "failures": [
+          {
+            "check": "bins_match_package",
+            "detail": "in package.json but undeclared: monitor-server, monitor-web"
+          }
+        ]
+      },
+      "pendingBinRenames": [
+        {
+          "bin": "monitor-server",
+          "replacement": "monitor serve",
+          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, so it cannot be declared above. The allowlisted equivalent already exists as the `monitor serve` subcommand; dropping the standalone bin is a breaking change to a published package and needs an owner decision."
+        },
+        {
+          "bin": "monitor-web",
+          "replacement": "monitor web (subcommand not implemented yet)",
+          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, and no allowlisted bin name fits a dashboard dev server. Replacing it needs a new `monitor web` subcommand plus an owner decision on the breaking change."
+        }
+      ]
+    }
+  }
+}

@@ -3,7 +3,9 @@
  * We stub systeminformation calls to avoid real system I/O in tests.
  */
 
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
+
+import type { CommandResult } from "./command.js";
 
 // ── Stub systeminformation before importing LocalCollector ────────────────────
 
@@ -74,17 +76,6 @@ mock.module("systeminformation", () => ({
   },
 }));
 
-mock.module("./command.js", () => ({
-  runLocalShellCommand: async () => ({
-    ok: true,
-    stdout: fakePsOutput,
-    stderr: "",
-    exitCode: 0,
-    durationMs: 1,
-    timedOut: false,
-  }),
-}));
-
 // Also mock os.loadavg
 mock.module("os", () => {
   const actual = require("os");
@@ -96,32 +87,59 @@ mock.module("os", () => {
 
 import { LocalCollector } from "./local";
 
+/**
+ * The one shell call `collect()` makes is stubbed at the class seam, not with
+ * `mock.module("./command.js", …)`.
+ *
+ * `mock.module` rewrites the registry for the whole `bun test` process, and bun
+ * binds each file's imports when it loads that file — so the stub reached every
+ * file loaded after this one and nothing at run time could put it back (an
+ * `afterAll` that re-registers the real module was measured to have no effect on
+ * bindings already made). src/collectors/command.test.ts imports the same
+ * "./command.js", so on a machine where bun discovered this file first its timeout
+ * probe was handed `fakePsOutput` instead of running a shell: green here, red on
+ * the GitHub runner, purely because directory iteration order differs. Overriding
+ * the method keeps the stub inside this file.
+ */
+class StubShellLocalCollector extends LocalCollector {
+  override async runCommand(): Promise<CommandResult> {
+    return {
+      ok: true,
+      stdout: fakePsOutput,
+      stderr: "",
+      exitCode: 0,
+      durationMs: 1,
+      timedOut: false,
+    };
+  }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("LocalCollector", () => {
   describe("collect()", () => {
     it("returns ok: true", async () => {
-      const collector = new LocalCollector("test-machine");
+      const collector = new StubShellLocalCollector("test-machine");
       const result = await collector.collect();
       expect(result.ok).toBe(true);
     });
 
     it("snapshot has machineId field", async () => {
-      const collector = new LocalCollector("my-machine");
+      const collector = new StubShellLocalCollector("my-machine");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.machineId).toBe("my-machine");
     });
 
     it("snapshot has hostname from osInfo", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.hostname).toBe("testhost");
     });
 
     it("snapshot has platform from osInfo", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(typeof result.snapshot.platform).toBe("string");
@@ -129,7 +147,7 @@ describe("LocalCollector", () => {
     });
 
     it("snapshot has uptime as number", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(typeof result.snapshot.uptime).toBe("number");
@@ -138,14 +156,14 @@ describe("LocalCollector", () => {
 
     it("snapshot.ts is a recent timestamp", async () => {
       const before = Date.now() - 1000;
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.ts).toBeGreaterThan(before);
     });
 
     it("snapshot.cpu has required fields", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       const { cpu } = result.snapshot;
@@ -159,7 +177,7 @@ describe("LocalCollector", () => {
     });
 
     it("snapshot.cpu.usagePercent is between 0 and 100", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.cpu.usagePercent).toBeGreaterThanOrEqual(0);
@@ -167,7 +185,7 @@ describe("LocalCollector", () => {
     });
 
     it("snapshot.mem has required fields", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       const { mem } = result.snapshot;
@@ -180,28 +198,28 @@ describe("LocalCollector", () => {
     });
 
     it("snapshot.mem.totalMb is greater than 0", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.mem.totalMb).toBeGreaterThan(0);
     });
 
     it("snapshot.mem.usedMb is greater than 0", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(result.snapshot.mem.usedMb).toBeGreaterThan(0);
     });
 
     it("snapshot.disks is an array", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(Array.isArray(result.snapshot.disks)).toBe(true);
     });
 
     it("snapshot.disks[0] has required fields", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       const disk = result.snapshot.disks[0];
@@ -214,21 +232,21 @@ describe("LocalCollector", () => {
     });
 
     it("snapshot.gpus is an array", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(Array.isArray(result.snapshot.gpus)).toBe(true);
     });
 
     it("snapshot.processes is an array", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       expect(Array.isArray(result.snapshot.processes)).toBe(true);
     });
 
     it("snapshot.processes have required fields", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const result = await collector.collect();
       if (!result.ok) throw new Error(result.error);
       for (const proc of result.snapshot.processes) {
@@ -244,7 +262,7 @@ describe("LocalCollector", () => {
 
   describe("topProcesses()", () => {
     it("returns an array limited to n", async () => {
-      const collector = new LocalCollector("local");
+      const collector = new StubShellLocalCollector("local");
       const top = await collector.topProcesses(1);
       expect(Array.isArray(top)).toBe(true);
       expect(top.length).toBeLessThanOrEqual(1);

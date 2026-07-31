@@ -276,6 +276,55 @@ describe("loadConfig()", () => {
   });
 });
 
+describe("machine aliases", () => {
+  it("resolves an alias in CLI JSON output", () => {
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({
+        machines: [{ id: "production-server-01", label: "Production", type: "local" }],
+        aliases: { prod: "production-server-01" },
+      }),
+      "utf-8"
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), "bins", "monitor.ts"), "status", "prod", "--json"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MONITOR_CONFIG_DIR: configDir },
+        encoding: "utf-8",
+      }
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ machineId: "production-server-01" });
+  });
+
+  it("exits non-zero for an unknown alias", () => {
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({
+        machines: [{ id: "production-server-01", label: "Production", type: "local" }],
+        aliases: { prod: "production-server-01" },
+      }),
+      "utf-8"
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [join(process.cwd(), "bins", "monitor.ts"), "status", "staging", "--json"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MONITOR_CONFIG_DIR: configDir },
+        encoding: "utf-8",
+      }
+    );
+
+    expect(result.status).toBe(1);
+  });
+});
+
 describe("saveConfig() + loadConfig() round-trip", () => {
   it("saved config can be loaded back with matching values", () => {
     // Load the current config, modify it slightly, save and reload

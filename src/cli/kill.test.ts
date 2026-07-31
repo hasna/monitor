@@ -169,7 +169,7 @@ describe("monitor kill --name", () => {
 
     expect(result.status).toBe(1);
     const output = JSON.parse(result.stdout) as { error: string };
-    expect(output.error).toContain('Machine "missing-machine" is not configured');
+    expect(output.error).toContain('Unknown machine or alias "missing-machine"');
   });
 
   it("rejects an invalid regular expression with JSON and a non-zero exit", () => {
