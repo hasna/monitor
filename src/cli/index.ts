@@ -365,7 +365,7 @@ configCmd
   .description("Open the configuration file in $EDITOR")
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
-    initConfig();
+    initConfig({ quiet: opts.json });
     const path = getConfigPath();
     const editor = process.env["EDITOR"]?.trim() || "vi";
     const result = spawnSync(editor, [path], { stdio: "inherit" });
@@ -394,7 +394,7 @@ configCmd
   .action((opts) => {
     const path = getConfigPath();
     try {
-      validateConfig();
+      validateConfig({ quiet: opts.json });
       if (opts.json) {
         console.log(JSON.stringify({ valid: true, path }, null, 2));
       } else {
@@ -417,7 +417,7 @@ configCmd
   .option("-j, --json", "Output raw JSON")
   .action((opts) => {
     const path = getConfigPath();
-    const backup = backupConfig();
+    const backup = backupConfig(new Date(), { quiet: opts.json });
     if (opts.json) {
       console.log(JSON.stringify({ path, backup }, null, 2));
     } else {

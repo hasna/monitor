@@ -54,6 +54,12 @@ function runConfigCli(args: string[], env: NodeJS.ProcessEnv = process.env) {
   );
 }
 
+function withoutConfigDirOverride(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  delete copy["MONITOR_CONFIG_DIR"];
+  return copy;
+}
+
 describe("loadConfig()", () => {
   it("uses MONITOR_CONFIG_DIR and keeps defaults for partial config files", () => {
     writeFileSync(
@@ -342,6 +348,46 @@ describe("monitor config commands", () => {
     expect(readFileSync(markerPath, "utf-8")).toBe(join(configDir, "config.json"));
   });
 
+  it("migrates legacy config before editing on first run", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
+    const legacyDir = join(homeDir, ".monitor");
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyConfig = {
+      machines: [{ id: "legacy", label: "Legacy", type: "local" }],
+    };
+    writeFileSync(join(legacyDir, "config.json"), JSON.stringify(legacyConfig), "utf-8");
+
+    const editorPath = join(homeDir, "editor.sh");
+    const markerPath = join(homeDir, "edited-path.txt");
+    writeFileSync(editorPath, '#!/bin/sh\nprintf "%s" "$1" > "$MONITOR_EDITOR_MARKER"\n', "utf-8");
+    chmodSync(editorPath, 0o755);
+
+    try {
+      const configPath = join(homeDir, ".hasna", "monitor", "config.json");
+      const result = runConfigCli(
+        ["edit", "--json"],
+        withoutConfigDirOverride({
+          ...process.env,
+          HOME: homeDir,
+          EDITOR: editorPath,
+          MONITOR_EDITOR_MARKER: markerPath,
+        })
+      );
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        edited: true,
+        path: configPath,
+        editor: editorPath,
+      });
+      expect(readFileSync(markerPath, "utf-8")).toBe(configPath);
+      expect(JSON.parse(readFileSync(configPath, "utf-8"))).toEqual(legacyConfig);
+      expect(existsSync(join(homeDir, ".monitor.bak", "config.json"))).toBe(true);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("validates config JSON and exits non-zero for schema errors", () => {
     writeFileSync(
       join(configDir, "config.json"),
@@ -392,5 +438,36 @@ describe("monitor config commands", () => {
       backup: backupOutput.backup,
     });
     expect(JSON.parse(readFileSync(configPath, "utf-8"))).toEqual(original);
+  });
+
+  it("migrates legacy config before backing up on first run", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "open-monitor-home-"));
+    const legacyDir = join(homeDir, ".monitor");
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyConfig = {
+      machines: [{ id: "legacy", label: "Legacy", type: "local" }],
+    };
+    writeFileSync(join(legacyDir, "config.json"), JSON.stringify(legacyConfig), "utf-8");
+
+    try {
+      const configPath = join(homeDir, ".hasna", "monitor", "config.json");
+      const result = runConfigCli(
+        ["backup", "--json"],
+        withoutConfigDirOverride({
+          ...process.env,
+          HOME: homeDir,
+        })
+      );
+
+      expect(result.status).toBe(0);
+      const backupOutput = JSON.parse(result.stdout) as { path: string; backup: string };
+      expect(backupOutput.path).toBe(configPath);
+      expect(backupOutput.backup).toMatch(/config\.json\.\d{8}T\d{9}Z\.bak$/);
+      expect(JSON.parse(readFileSync(configPath, "utf-8"))).toEqual(legacyConfig);
+      expect(JSON.parse(readFileSync(backupOutput.backup, "utf-8"))).toEqual(legacyConfig);
+      expect(existsSync(join(homeDir, ".monitor.bak", "config.json"))).toBe(true);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 });

@@ -3,6 +3,10 @@ import { homedir } from "os";
 import { basename, dirname, join, resolve } from "path";
 import { z } from "zod";
 
+type ConfigMigrationOptions = {
+  quiet?: boolean;
+};
+
 export interface SshMachineConfig {
   host: string;
   port?: number;
@@ -242,7 +246,15 @@ const LEGACY_PATHS = [
  *
  * Safe to call multiple times — exits early if target already exists.
  */
-export function migrateConfig(): void {
+function logMigration(message: string, options: ConfigMigrationOptions): void {
+  if (!options.quiet) console.log(message);
+}
+
+function warnMigration(message: string, options: ConfigMigrationOptions): void {
+  if (!options.quiet) console.warn(message);
+}
+
+export function migrateConfig(options: ConfigMigrationOptions = {}): void {
   // If the canonical location already has a config, no migration needed
   const configDir = getConfigDir();
   const configPath = getConfigPath();
@@ -262,22 +274,22 @@ export function migrateConfig(): void {
 
     if (existsSync(legacyConfig)) {
       copyFileSync(legacyConfig, configPath);
-      console.log(`[monitor] Migrated config from ${legacyConfig} → ${configPath}`);
+      logMigration(`[monitor] Migrated config from ${legacyConfig} → ${configPath}`, options);
     }
 
     if (existsSync(legacyDb)) {
       const newDbPath = join(configDir, "monitor.db");
       copyFileSync(legacyDb, newDbPath);
-      console.log(`[monitor] Migrated database from ${legacyDb} → ${newDbPath}`);
+      logMigration(`[monitor] Migrated database from ${legacyDb} → ${newDbPath}`, options);
     }
 
     // Rename old directory to .bak
     const backupDir = `${legacyDir}.bak`;
     try {
       renameSync(legacyDir, backupDir);
-      console.log(`[monitor] Renamed legacy directory ${legacyDir} → ${backupDir}`);
+      logMigration(`[monitor] Renamed legacy directory ${legacyDir} → ${backupDir}`, options);
     } catch {
-      console.warn(`[monitor] Could not rename ${legacyDir} to ${backupDir} — manual cleanup may be needed`);
+      warnMigration(`[monitor] Could not rename ${legacyDir} to ${backupDir} — manual cleanup may be needed`, options);
     }
 
     // Only migrate the first match found
@@ -289,7 +301,8 @@ export function migrateConfig(): void {
  * Create config directory and write default config if none exists.
  * Safe to call multiple times.
  */
-export function initConfig(): void {
+export function initConfig(options: ConfigMigrationOptions = {}): void {
+  ensureMigrated(options);
   const configDir = getConfigDir();
   const configPath = getConfigPath();
   if (!existsSync(configDir)) {
@@ -302,16 +315,16 @@ export function initConfig(): void {
 
 const migratedConfigDirs = new Set<string>();
 
-function ensureMigrated(): void {
+function ensureMigrated(options: ConfigMigrationOptions = {}): void {
   const configDir = getConfigDir();
   if (migratedConfigDirs.has(configDir)) return;
   migratedConfigDirs.add(configDir);
-  migrateConfig();
+  migrateConfig(options);
 }
 
-export function loadConfig(): MonitorConfig {
-  ensureMigrated();
-  initConfig();
+export function loadConfig(options: ConfigMigrationOptions = {}): MonitorConfig {
+  ensureMigrated(options);
+  initConfig(options);
 
   try {
     const configPath = getConfigPath();
@@ -347,12 +360,12 @@ function configBackupTimestamp(date: Date): string {
   return date.toISOString().replace(/[-:.]/g, "");
 }
 
-export function validateConfig(): void {
-  loadConfig();
+export function validateConfig(options: ConfigMigrationOptions = {}): void {
+  loadConfig(options);
 }
 
-export function backupConfig(date = new Date()): string {
-  initConfig();
+export function backupConfig(date = new Date(), options: ConfigMigrationOptions = {}): string {
+  initConfig(options);
   const configPath = getConfigPath();
   const backupPath = `${configPath}.${configBackupTimestamp(date)}.bak`;
   copyFileSync(configPath, backupPath);
