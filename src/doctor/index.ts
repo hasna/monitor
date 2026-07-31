@@ -50,7 +50,7 @@ export interface HealthCheck {
 
 // ── Thresholds ───────────────────────────────────────────────────────────────
 
-interface Thresholds {
+export interface DoctorThresholds {
   cpuWarn: number;
   cpuCritical: number;
   memWarn: number;
@@ -62,9 +62,10 @@ interface Thresholds {
   zombieWarn: number;
   zombieCritical: number;
   loadAvgFactor: number; // warn if load_1 > factor * cpu_count
+  loadAvgWarn?: number;
 }
 
-const DEFAULT_THRESHOLDS: Thresholds = {
+const DEFAULT_THRESHOLDS: DoctorThresholds = {
   cpuWarn: 85,
   cpuCritical: 98,
   memWarn: 80,
@@ -244,7 +245,7 @@ export function checkZombies(report: ProcessReport, t = DEFAULT_THRESHOLDS): Doc
 export function checkLoadAvg(snapshot: SystemSnapshot, t = DEFAULT_THRESHOLDS): DoctorCheck {
   const load1 = snapshot.cpu.loadAvg[0] ?? 0;
   const cpuCount = snapshot.cpu.cores || 1;
-  const warnThreshold = t.loadAvgFactor * cpuCount;
+  const warnThreshold = t.loadAvgWarn ?? t.loadAvgFactor * cpuCount;
   const criticalThreshold = warnThreshold * 1.5;
 
   if (load1 >= criticalThreshold) {
@@ -280,9 +281,9 @@ export function checkLoadAvg(snapshot: SystemSnapshot, t = DEFAULT_THRESHOLDS): 
 // ── Doctor class ──────────────────────────────────────────────────────────────
 
 export class Doctor {
-  private thresholds: Thresholds;
+  private thresholds: DoctorThresholds;
 
-  constructor(thresholds: Partial<Thresholds> = {}) {
+  constructor(thresholds: Partial<DoctorThresholds> = {}) {
     this.thresholds = { ...DEFAULT_THRESHOLDS, ...thresholds };
   }
 

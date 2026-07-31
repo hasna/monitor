@@ -1,7 +1,7 @@
 import { listAlerts } from "./db/queries.js";
 import type { AlertRow, ProcessRow } from "./db/schema.js";
 import { Doctor } from "./doctor/index.js";
-import type { DoctorCheck, DoctorReport, DoctorStatus, AlertSeverity } from "./doctor/index.js";
+import type { DoctorCheck, DoctorReport, DoctorStatus, AlertSeverity, DoctorThresholds } from "./doctor/index.js";
 import type { Collector } from "./collectors/index.js";
 import { getCollectorForMachine, listKnownMachineIds } from "./collectors/index.js";
 import type { SystemSnapshot } from "./collectors/local.js";
@@ -319,7 +319,10 @@ export function extendDoctorReport(baseReport: DoctorReport, runtimeHealth: Runt
   };
 }
 
-export async function collectMachineDiagnostics(machineId = "local"): Promise<MachineDiagnostics> {
+export async function collectMachineDiagnostics(
+  machineId = "local",
+  doctorThresholds: Partial<DoctorThresholds> = {}
+): Promise<MachineDiagnostics> {
   const collector = getCollectorForMachine(machineId);
   const [collected, runtimeHealth] = await Promise.all([
     collector.collect(),
@@ -333,7 +336,9 @@ export async function collectMachineDiagnostics(machineId = "local"): Promise<Ma
   const processRows = snapshot.processes.map((processInfo) => processInfoToRow(processInfo, machineId));
   const processReport = processManager.analyse(processRows);
   const doctorReport = extendDoctorReport(
-    doctor.analyse(snapshot, processReport),
+    Object.keys(doctorThresholds).length > 0
+      ? new Doctor(doctorThresholds).analyse(snapshot, processReport)
+      : doctor.analyse(snapshot, processReport),
     runtimeHealth
   );
 

@@ -27,7 +27,6 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "build": "rm -rf dist && bun build ./src/index.ts --outdir ./dist --target bun --external cpu-features --external @aws-sdk/* --external node-ssh --external ssh2 --external node-cron",
-    "typecheck": "bunx tsc --noEmit",
     "contract-check": "bunx @hasna/contracts@0.8.5 repo-conformance .",
     "contract-baseline": "bun scripts/contract-baseline.ts",
     "contract-gate": "bun scripts/contract-gate.ts --online",
@@ -35,6 +34,7 @@
     "prepack": "bun run scan:artifact",
     "postinstall": "mkdir -p $HOME/.hasna/monitor 2>/dev/null || true",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
     "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
