@@ -1,8 +1,19 @@
-import { describe, expect, it } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import type { SystemSnapshot } from "../collectors/local.js";
 import { formatCompactStatus } from "./index.js";
+
+let configDir: string | undefined;
+
+afterEach(() => {
+  if (configDir) {
+    rmSync(configDir, { recursive: true, force: true });
+    configDir = undefined;
+  }
+});
 
 function makeSnapshot(overrides: Partial<SystemSnapshot> = {}): SystemSnapshot {
   return {
@@ -55,6 +66,11 @@ function stripAnsi(value: string): string {
   return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
+function writeConfig(config: unknown): void {
+  configDir = mkdtempSync(join(tmpdir(), "monitor-cli-"));
+  writeFileSync(join(configDir, "config.json"), JSON.stringify(config));
+}
+
 describe("monitor status --compact", () => {
   it("formats a stable single-line summary using the root disk", () => {
     const output = stripAnsi(formatCompactStatus(makeSnapshot()));
@@ -80,5 +96,60 @@ describe("monitor status --compact", () => {
     expect(child.stdout.trim()).toMatch(/^cpu \d+% mem \d+% disk (?:\d+%|n\/a)$/);
     expect(child.stdout.trim().split(/\r?\n/)).toHaveLength(1);
     expect(child.stdout).not.toContain("\u001B");
+  });
+});
+
+describe("monitor compare", () => {
+  it("emits one JSON row per configured machine", () => {
+    writeConfig({
+      machines: [
+        { id: "local-a", label: "Local A", type: "local" },
+        { id: "local-b", label: "Local B", type: "local" },
+      ],
+    });
+
+    const result = spawnSync(
+      process.execPath,
+      ["run", "./bins/monitor.ts", "compare", "--json"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MONITOR_CONFIG_DIR: configDir },
+        encoding: "utf-8",
+        timeout: 30_000,
+      }
+    );
+
+    expect(result.status).toBe(0);
+    const rows = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.machineId)).toEqual(["local-a", "local-b"]);
+    for (const row of rows) {
+      expect(typeof row.cpuPercent).toBe("number");
+      expect(typeof row.memPercent).toBe("number");
+      expect(row.diskPercent === null || typeof row.diskPercent === "number").toBe(true);
+      expect(row.error).toBeNull();
+    }
+  });
+
+  it("resolves explicit machine aliases", () => {
+    writeConfig({
+      machines: [{ id: "local-a", label: "Local A", type: "local" }],
+      aliases: { prod: "local-a" },
+    });
+
+    const result = spawnSync(
+      process.execPath,
+      ["run", "./bins/monitor.ts", "compare", "prod", "--json"],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MONITOR_CONFIG_DIR: configDir },
+        encoding: "utf-8",
+        timeout: 30_000,
+      }
+    );
+
+    expect(result.status).toBe(0);
+    const rows = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+    expect(rows.map((row) => row.machineId)).toEqual(["local-a"]);
   });
 });

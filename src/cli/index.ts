@@ -85,6 +85,16 @@ type MachineListItem = {
   host?: string | null;
 };
 
+type MachineComparisonRow = {
+  machineId: string;
+  hostname: string | null;
+  cpuPercent: number | null;
+  memPercent: number | null;
+  diskPercent: number | null;
+  diskMount: string | null;
+  error: string | null;
+};
+
 // ── Unicode progress bar ───────────────────────────────────────────────────────
 
 function progressBar(pct: number, width = 20): string {
@@ -300,6 +310,49 @@ function printPageHint<T>(
 ): void {
   if (page.hidden > 0) {
     console.log(chalk.dim(`${indent}${compactHint(page, detailHint)}`));
+  }
+}
+
+async function collectMachineComparison(machineId: string): Promise<MachineComparisonRow> {
+  try {
+    const result = await getCollectorForMachine(machineId).collect();
+    if (!result.ok) {
+      return {
+        machineId,
+        hostname: null,
+        cpuPercent: null,
+        memPercent: null,
+        diskPercent: null,
+        diskMount: null,
+        error: result.error,
+      };
+    }
+
+    const disk = result.snapshot.disks.reduce<(typeof result.snapshot.disks)[number] | null>(
+      (highest, candidate) =>
+        !highest || candidate.usagePercent > highest.usagePercent ? candidate : highest,
+      null
+    );
+
+    return {
+      machineId: result.snapshot.machineId,
+      hostname: result.snapshot.hostname,
+      cpuPercent: result.snapshot.cpu.usagePercent,
+      memPercent: result.snapshot.mem.usagePercent,
+      diskPercent: disk?.usagePercent ?? null,
+      diskMount: disk?.mount ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      machineId,
+      hostname: null,
+      cpuPercent: null,
+      memPercent: null,
+      diskPercent: null,
+      diskMount: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -570,6 +623,50 @@ program
     }
 
     console.log(chalk.dim(`  Processes: ${snap.processes.length}`));
+    console.log();
+  });
+
+// ── monitor compare [machines...] ────────────────────────────────────────────
+
+program
+  .command("compare [machines...]")
+  .description("Compare CPU, memory, and disk usage across machines")
+  .option("-n, --limit <n>", "Number of machines to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArgs: string[], opts) => {
+    const machineIds = machineArgs.length > 0 ? machineArgs.map(resolveMachineId) : listKnownMachineIds();
+    const rows = await Promise.all(machineIds.map(collectMachineComparison));
+
+    if (opts.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+
+    console.log();
+    console.log(
+      chalk.dim(
+        `  ${"MACHINE".padEnd(24)} ${"CPU".padStart(7)} ${"MEMORY".padStart(7)} ${"DISK".padStart(7)}  MOUNT`
+      )
+    );
+    const page = pageItems(rows, {
+      limit: opts.limit,
+      cursor: opts.cursor,
+      defaultLimit: DEFAULT_LIST_LIMIT,
+    });
+
+    for (const row of page.items) {
+      const machine = truncateText(row.machineId, 24).padEnd(24);
+      if (row.error) {
+        console.log(`  ${machine} ${chalk.red(row.error)}`);
+        continue;
+      }
+
+      console.log(
+        `  ${machine} ${formatPct(row.cpuPercent!)} ${formatPct(row.memPercent!)} ${row.diskPercent === null ? chalk.dim("    -  ") : formatPct(row.diskPercent)}  ${row.diskMount ?? "-"}`
+      );
+    }
+    printPageHint(page, "Use --limit, --cursor, or --json for more machines.");
     console.log();
   });
 
