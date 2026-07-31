@@ -1,10 +1,20 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
+import { spawnSync } from "node:child_process";
 import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
 import type { SystemSnapshot } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
-import { loadConfig, saveConfig, migrateConfig } from "../config.js";
+import {
+  backupConfig,
+  getConfigPath,
+  initConfig,
+  loadConfig,
+  migrateConfig,
+  restoreConfig,
+  saveConfig,
+  validateConfig,
+} from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
 import {
   listMachines,
@@ -395,6 +405,101 @@ program
   .name("monitor")
   .description(chalk.cyan("@hasna/monitor") + " — system monitoring CLI")
   .version(MONITOR_VERSION);
+
+// ── monitor config ───────────────────────────────────────────────────────────
+
+const configCmd = program
+  .command("config")
+  .description("Manage the monitor configuration file");
+
+configCmd
+  .command("edit")
+  .description("Open the configuration file in $EDITOR")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    initConfig({ quiet: opts.json });
+    const path = getConfigPath();
+    const editor = process.env["EDITOR"]?.trim() || "vi";
+    const result = spawnSync(editor, [path], { stdio: "inherit" });
+
+    if (result.error || result.status !== 0) {
+      const error = result.error?.message ?? `Editor exited with status ${result.status}`;
+      if (opts.json) {
+        console.log(JSON.stringify({ edited: false, path, editor, error }, null, 2));
+      } else {
+        console.error(chalk.red(`  Unable to edit ${path}: ${error}`));
+      }
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ edited: true, path, editor }, null, 2));
+    } else {
+      console.log(chalk.green(`  Edited ${path}`));
+    }
+  });
+
+configCmd
+  .command("validate")
+  .description("Validate the configuration file against its schema")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    const path = getConfigPath();
+    try {
+      validateConfig({ quiet: opts.json });
+      if (opts.json) {
+        console.log(JSON.stringify({ valid: true, path }, null, 2));
+      } else {
+        console.log(chalk.green(`  Config is valid: ${path}`));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (opts.json) {
+        console.log(JSON.stringify({ valid: false, path, error: message }, null, 2));
+      } else {
+        console.error(chalk.red(`  ${message}`));
+      }
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("backup")
+  .description("Create a timestamped copy next to the configuration file")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    const path = getConfigPath();
+    const backup = backupConfig(new Date(), { quiet: opts.json });
+    if (opts.json) {
+      console.log(JSON.stringify({ path, backup }, null, 2));
+    } else {
+      console.log(chalk.green(`  Config backed up to ${backup}`));
+    }
+  });
+
+configCmd
+  .command("restore [backup]")
+  .description("Restore a backup (defaults to the newest adjacent backup)")
+  .option("-j, --json", "Output raw JSON")
+  .action((backupArg: string | undefined, opts) => {
+    const path = getConfigPath();
+    try {
+      const backup = restoreConfig(backupArg);
+      if (opts.json) {
+        console.log(JSON.stringify({ path, backup }, null, 2));
+      } else {
+        console.log(chalk.green(`  Config restored from ${backup}`));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (opts.json) {
+        console.log(JSON.stringify({ path, backup: backupArg ?? null, error: message }, null, 2));
+      } else {
+        console.error(chalk.red(`  ${message}`));
+      }
+      process.exit(1);
+    }
+  });
 
 // ── monitor status [machine] ──────────────────────────────────────────────────
 
