@@ -2,10 +2,20 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
 import { createInterface } from "node:readline/promises";
+import { spawnSync } from "node:child_process";
 import { getCollectorForMachine, listKnownMachineIds, LocalCollector } from "../collectors/index.js";
 import type { SystemSnapshot } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
-import { loadConfig, saveConfig, migrateConfig } from "../config.js";
+import {
+  backupConfig,
+  getConfigPath,
+  initConfig,
+  loadConfig,
+  migrateConfig,
+  restoreConfig,
+  saveConfig,
+  validateConfig,
+} from "../config.js";
 import type { IntegrationsConfig } from "../config.js";
 import {
   listMachines,
@@ -74,6 +84,16 @@ type MachineListItem = {
   status: string;
   last_seen: number | null;
   host?: string | null;
+};
+
+type MachineComparisonRow = {
+  machineId: string;
+  hostname: string | null;
+  cpuPercent: number | null;
+  memPercent: number | null;
+  diskPercent: number | null;
+  diskMount: string | null;
+  error: string | null;
 };
 
 // ── Unicode progress bar ───────────────────────────────────────────────────────
@@ -306,6 +326,49 @@ function printPageHint<T>(
   }
 }
 
+async function collectMachineComparison(machineId: string): Promise<MachineComparisonRow> {
+  try {
+    const result = await getCollectorForMachine(machineId).collect();
+    if (!result.ok) {
+      return {
+        machineId,
+        hostname: null,
+        cpuPercent: null,
+        memPercent: null,
+        diskPercent: null,
+        diskMount: null,
+        error: result.error,
+      };
+    }
+
+    const disk = result.snapshot.disks.reduce<(typeof result.snapshot.disks)[number] | null>(
+      (highest, candidate) =>
+        !highest || candidate.usagePercent > highest.usagePercent ? candidate : highest,
+      null
+    );
+
+    return {
+      machineId: result.snapshot.machineId,
+      hostname: result.snapshot.hostname,
+      cpuPercent: result.snapshot.cpu.usagePercent,
+      memPercent: result.snapshot.mem.usagePercent,
+      diskPercent: disk?.usagePercent ?? null,
+      diskMount: disk?.mount ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      machineId,
+      hostname: null,
+      cpuPercent: null,
+      memPercent: null,
+      diskPercent: null,
+      diskMount: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 async function renderInstalledApps(
   machineArg: string | undefined,
   opts: { all?: boolean; compare?: boolean; json?: boolean; limit?: number; cursor?: number; verbose?: boolean },
@@ -409,6 +472,101 @@ program
   .description(chalk.cyan("@hasna/monitor") + " — system monitoring CLI")
   .version(MONITOR_VERSION);
 
+// ── monitor config ───────────────────────────────────────────────────────────
+
+const configCmd = program
+  .command("config")
+  .description("Manage the monitor configuration file");
+
+configCmd
+  .command("edit")
+  .description("Open the configuration file in $EDITOR")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    initConfig({ quiet: opts.json });
+    const path = getConfigPath();
+    const editor = process.env["EDITOR"]?.trim() || "vi";
+    const result = spawnSync(editor, [path], { stdio: "inherit" });
+
+    if (result.error || result.status !== 0) {
+      const error = result.error?.message ?? `Editor exited with status ${result.status}`;
+      if (opts.json) {
+        console.log(JSON.stringify({ edited: false, path, editor, error }, null, 2));
+      } else {
+        console.error(chalk.red(`  Unable to edit ${path}: ${error}`));
+      }
+      process.exit(1);
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ edited: true, path, editor }, null, 2));
+    } else {
+      console.log(chalk.green(`  Edited ${path}`));
+    }
+  });
+
+configCmd
+  .command("validate")
+  .description("Validate the configuration file against its schema")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    const path = getConfigPath();
+    try {
+      validateConfig({ quiet: opts.json });
+      if (opts.json) {
+        console.log(JSON.stringify({ valid: true, path }, null, 2));
+      } else {
+        console.log(chalk.green(`  Config is valid: ${path}`));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (opts.json) {
+        console.log(JSON.stringify({ valid: false, path, error: message }, null, 2));
+      } else {
+        console.error(chalk.red(`  ${message}`));
+      }
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("backup")
+  .description("Create a timestamped copy next to the configuration file")
+  .option("-j, --json", "Output raw JSON")
+  .action((opts) => {
+    const path = getConfigPath();
+    const backup = backupConfig(new Date(), { quiet: opts.json });
+    if (opts.json) {
+      console.log(JSON.stringify({ path, backup }, null, 2));
+    } else {
+      console.log(chalk.green(`  Config backed up to ${backup}`));
+    }
+  });
+
+configCmd
+  .command("restore [backup]")
+  .description("Restore a backup (defaults to the newest adjacent backup)")
+  .option("-j, --json", "Output raw JSON")
+  .action((backupArg: string | undefined, opts) => {
+    const path = getConfigPath();
+    try {
+      const backup = restoreConfig(backupArg);
+      if (opts.json) {
+        console.log(JSON.stringify({ path, backup }, null, 2));
+      } else {
+        console.log(chalk.green(`  Config restored from ${backup}`));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (opts.json) {
+        console.log(JSON.stringify({ path, backup: backupArg ?? null, error: message }, null, 2));
+      } else {
+        console.error(chalk.red(`  ${message}`));
+      }
+      process.exit(1);
+    }
+  });
+
 // ── monitor status [machine] ──────────────────────────────────────────────────
 
 program
@@ -478,6 +636,50 @@ program
     }
 
     console.log(chalk.dim(`  Processes: ${snap.processes.length}`));
+    console.log();
+  });
+
+// ── monitor compare [machines...] ────────────────────────────────────────────
+
+program
+  .command("compare [machines...]")
+  .description("Compare CPU, memory, and disk usage across machines")
+  .option("-n, --limit <n>", "Number of machines to show", parseLimitOption, DEFAULT_LIST_LIMIT)
+  .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
+  .option("-j, --json", "Output raw JSON")
+  .action(async (machineArgs: string[], opts) => {
+    const machineIds = machineArgs.length > 0 ? machineArgs.map(resolveMachineId) : listKnownMachineIds();
+    const rows = await Promise.all(machineIds.map(collectMachineComparison));
+
+    if (opts.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+
+    console.log();
+    console.log(
+      chalk.dim(
+        `  ${"MACHINE".padEnd(24)} ${"CPU".padStart(7)} ${"MEMORY".padStart(7)} ${"DISK".padStart(7)}  MOUNT`
+      )
+    );
+    const page = pageItems(rows, {
+      limit: opts.limit,
+      cursor: opts.cursor,
+      defaultLimit: DEFAULT_LIST_LIMIT,
+    });
+
+    for (const row of page.items) {
+      const machine = truncateText(row.machineId, 24).padEnd(24);
+      if (row.error) {
+        console.log(`  ${machine} ${chalk.red(row.error)}`);
+        continue;
+      }
+
+      console.log(
+        `  ${machine} ${formatPct(row.cpuPercent!)} ${formatPct(row.memPercent!)} ${row.diskPercent === null ? chalk.dim("    -  ") : formatPct(row.diskPercent)}  ${row.diskMount ?? "-"}`
+      );
+    }
+    printPageHint(page, "Use --limit, --cursor, or --json for more machines.");
     console.log();
   });
 
