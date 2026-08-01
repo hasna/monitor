@@ -99,6 +99,28 @@ describe("monitor kill --name", () => {
     expect(isAlive(second.pid!)).toBe(true);
   });
 
+  it("refuses oversized batches before sending any signals", () => {
+    const marker = `monitor-kill-limit-${process.pid}-${Date.now()}`;
+    const spawned = Array.from({ length: 6 }, () => startMarkedProcess(marker));
+
+    const result = runMonitorKill(["--name", `^${marker}`, "--yes", "--json"]);
+
+    expect(result.status).toBe(1);
+    const output = JSON.parse(result.stdout) as {
+      error: string;
+      actions: unknown[];
+      matches: Array<{ pid: number }>;
+    };
+    expect(output.error).toContain("no processes were killed");
+    expect(output.actions).toEqual([]);
+    expect(output.matches.map((match) => match.pid)).toEqual(
+      expect.arrayContaining(spawned.map((child) => child.pid!))
+    );
+    for (const child of spawned) {
+      expect(isAlive(child.pid!)).toBe(true);
+    }
+  });
+
   it("kills a single command-regex match", async () => {
     const marker = `monitor-kill-single-${process.pid}-${Date.now()}`;
     const child = startMarkedProcess(marker);

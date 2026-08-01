@@ -10,14 +10,24 @@ import type { Collector } from "../collectors/index.js";
 const KILL_RATE_LIMIT = 5;
 const KILL_WINDOW_MS = 60_000;
 
-// machineId → timestamps of recent kills
+// machineId -> timestamps of recent kills
 const _killTimestamps = new Map<string, number[]>();
 
-function checkKillRateLimit(machineId: string): boolean {
-  const now = Date.now();
+function getRecentKillTimestamps(machineId: string, now = Date.now()): number[] {
   const timestamps = (_killTimestamps.get(machineId) ?? []).filter(
     (t) => now - t < KILL_WINDOW_MS
   );
+  _killTimestamps.set(machineId, timestamps);
+  return timestamps;
+}
+
+function remainingKillCapacity(machineId: string): number {
+  return Math.max(0, KILL_RATE_LIMIT - getRecentKillTimestamps(machineId).length);
+}
+
+function checkKillRateLimit(machineId: string): boolean {
+  const now = Date.now();
+  const timestamps = getRecentKillTimestamps(machineId, now);
   if (timestamps.length >= KILL_RATE_LIMIT) return false;
   timestamps.push(now);
   _killTimestamps.set(machineId, timestamps);
@@ -171,6 +181,10 @@ export function detectHighMemory(
 // ── ProcessManager class ─────────────────────────────────────────────────────
 
 export class ProcessManager {
+  remainingKillSlots(machineId = "local"): number {
+    return remainingKillCapacity(machineId);
+  }
+
   /**
    * Analyse a list of process rows and return a structured report.
    */

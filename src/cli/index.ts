@@ -1153,9 +1153,23 @@ program
       }
 
       const pm = new ProcessManager();
-      const actions: Array<ProcessAction & { cmd: string }> = [];
       const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
       const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
+      const remainingKillSlots = pm.remainingKillSlots(killMachineId);
+
+      if (matches.length > remainingKillSlots) {
+        const message =
+          `Refused: ${matches.length} processes match /${pattern}/ on ${machineId}, ` +
+          `but only ${remainingKillSlots} kill operation(s) remain this minute; no processes were killed`;
+        if (opts.json) {
+          output({ dry_run: false, error: message, actions: [] });
+        } else {
+          console.error(chalk.red(`  ${message}`));
+        }
+        process.exit(1);
+      }
+
+      const actions: Array<ProcessAction & { cmd: string }> = [];
       for (const match of matches) {
         const action = await pm.kill(match.pid, signal, killMachineId, remoteCollector);
         actions.push({ ...action, name: match.name, cmd: match.cmd });
