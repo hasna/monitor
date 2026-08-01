@@ -47,7 +47,7 @@ export function processInfoToRow(p: ProcessInfo, machineId = "local", snapshotAt
     ppid: p.ppid,
     name: p.name,
     cmd: p.cmd,
-    user: null,
+    user: p.user ?? null,
     cpu_percent: p.cpuPercent,
     mem_mb: p.memMb,
     status: p.state,

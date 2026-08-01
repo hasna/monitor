@@ -66,6 +66,7 @@ import {
 import { executeTmuxCommand } from "../tmux.js";
 import { MONITOR_VERSION } from "../version.js";
 import { getMonitorStatus } from "../status.js";
+import { buildProcessTree, filterProcessRows } from "../process-view.js";
 import {
   DEFAULT_LIST_LIMIT,
   DEFAULT_SEARCH_LIMIT,
@@ -915,6 +916,9 @@ program
   .option("--cursor <n>", "Zero-based row offset for the next page", parseCursorOption, 0)
   .option("-s, --sort <by>", "Sort by: cpu | mem", "cpu")
   .option("-f, --filter <f>", "Filter: all | zombies | orphans | high_mem", "all")
+  .option("--user <name>", "Filter by process owner")
+  .option("--name <pattern>", "Filter command/name by substring or /regex/")
+  .option("--tree", "Render the parent/child process tree")
   .option("-v, --verbose", "Include truncated command lines")
   .option("-j, --json", "Output raw JSON")
   .action(async (machineArg: string | undefined, opts) => {
@@ -946,6 +950,8 @@ program
         break;
     }
 
+    rows = filterProcessRows(rows, { user: opts.user, name: opts.name });
+
     const sortBy = opts.sort as "cpu" | "mem";
     rows = [...rows].sort((a, b) =>
       sortBy === "mem"
@@ -953,13 +959,16 @@ program
         : (b.cpu_percent ?? 0) - (a.cpu_percent ?? 0)
     );
 
-    const page = pageItems(rows, { limit: opts.limit, cursor: opts.cursor });
-    rows = page.items;
-
     if (opts.json) {
-      console.log(JSON.stringify(rows, null, 2));
+      const page = pageItems(rows, { limit: opts.limit, cursor: opts.cursor });
+      console.log(JSON.stringify(page.items, null, 2));
       return;
     }
+
+    const displayRows = opts.tree
+      ? buildProcessTree(rows)
+      : rows.map((process) => ({ process, prefix: "" }));
+    const page = pageItems(displayRows, { limit: opts.limit, cursor: opts.cursor });
 
     console.log();
     console.log(
@@ -972,7 +981,8 @@ program
     console.log(chalk.bold(header));
     console.log("  " + chalk.dim("-".repeat(70)));
 
-    for (const p of rows) {
+    for (const entry of page.items) {
+      const p = entry.process;
       const flags: string[] = [];
       if (p.is_zombie) flags.push(chalk.red("Z"));
       if (p.is_orphan) flags.push(chalk.yellow("O"));
@@ -981,9 +991,11 @@ program
       const memStr = (p.mem_mb ?? 0).toFixed(1).padEnd(10);
       const status = (p.status ?? "?").padEnd(10);
       const flagStr = (flags.join(",") || chalk.dim("—")).padEnd(8);
-      const name = opts.verbose && p.cmd
-        ? `${truncateText(p.name, 28)} ${chalk.dim(truncateText(p.cmd, 80))}`
-        : truncateText(p.name, 60);
+      const nameWidth = Math.max(8, (opts.verbose ? 28 : 60) - entry.prefix.length);
+      const processName = opts.verbose && p.cmd
+        ? `${truncateText(p.name, nameWidth)} ${chalk.dim(truncateText(p.cmd, 80))}`
+        : truncateText(p.name, nameWidth);
+      const name = `${chalk.dim(entry.prefix)}${processName}`;
 
       const line = `  ${String(p.pid).padEnd(8)} ${cpuStr} ${memStr} ${status} ${flagStr} ${name}`;
       if (p.is_zombie) {

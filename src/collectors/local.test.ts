@@ -251,6 +251,7 @@ describe("LocalCollector", () => {
       if (!result.ok) throw new Error(result.error);
       for (const proc of result.snapshot.processes) {
         expect(typeof proc.pid).toBe("number");
+        expect(typeof proc.user).toBe("string");
         expect(typeof proc.name).toBe("string");
         expect(typeof proc.cpuPercent).toBe("number");
         expect(typeof proc.memMb).toBe("number");

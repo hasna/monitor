@@ -2,9 +2,7 @@ import si from "systeminformation";
 import { loadavg } from "os";
 import type { CommandOptions, CommandResult } from "./command.js";
 import { runLocalShellCommand } from "./command.js";
-
-const PS_PROCESS_LIST_COMMAND =
-  "ps -eo pid=,ppid=,user=,stat=,%cpu=,rss=,etimes=,comm=,args=";
+import { parseProcessListOutput, PROCESS_LIST_COMMAND } from "./process-list.js";
 
 export interface CpuStats {
   brand: string;
@@ -44,6 +42,7 @@ export interface GpuStats {
 
 export interface ProcessInfo {
   pid: number;
+  user?: string;
   name: string;
   cmd: string;
   cpuPercent: number;
@@ -92,6 +91,7 @@ export class LocalCollector {
 
         return {
           pid: p.pid,
+          user: p.user,
           name: p.name,
           cmd: p.command,
           cpuPercent: p.cpu,
@@ -107,49 +107,11 @@ export class LocalCollector {
   }
 
   private async collectProcessInfo(): Promise<ProcessInfo[]> {
-    const result = await this.runCommand(PS_PROCESS_LIST_COMMAND, { timeoutMs: 2_000 });
+    const result = await this.runCommand(PROCESS_LIST_COMMAND, { timeoutMs: 2_000 });
     if (!result.ok || !result.stdout.trim()) {
       return await this.processInfoFromSystemInformation();
     }
-
-    const processes = result.stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .flatMap((line) => {
-        const match =
-          /^(\d+)\s+(-?\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/.exec(
-            line
-          );
-        if (!match) return [];
-
-        const pid = match[1]!;
-        const ppid = match[2]!;
-        const stat = match[4]!;
-        const cpuPercent = match[5]!;
-        const rssKb = match[6]!;
-        const elapsedSec = match[7]!;
-        const comm = match[8]!;
-        const args = match[9] ?? "";
-        return [{
-          pid: Number.parseInt(pid, 10),
-          name: comm,
-          cmd: args || comm,
-          cpuPercent: Number.parseFloat(cpuPercent),
-          memMb: Number.parseInt(rssKb, 10) / 1024,
-          state: stat,
-          ppid: Number.parseInt(ppid, 10),
-          isZombie: stat.includes("Z"),
-          isOrphan: false,
-          elapsedSeconds: Number.parseInt(elapsedSec, 10),
-        }];
-      });
-
-    const allPids = new Set(processes.map((processInfo) => processInfo.pid));
-    return processes.map((processInfo) => ({
-      ...processInfo,
-      isOrphan: processInfo.ppid !== 0 && !allPids.has(processInfo.ppid),
-    }));
+    return parseProcessListOutput(result.stdout);
   }
 
   async collect(): Promise<CollectorResult> {

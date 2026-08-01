@@ -2,6 +2,7 @@ import { NodeSSH } from "node-ssh";
 import type { CollectorResult, SystemSnapshot, GpuStats } from "./local.js";
 import type { MachineRow } from "../db/schema.js";
 import type { CommandOptions, CommandResult } from "./command.js";
+import { parseProcessListOutput, PROCESS_LIST_COMMAND } from "./process-list.js";
 
 export interface SshCollectorOptions {
   machineId: string;
@@ -74,9 +75,7 @@ export class SshCollector {
           this.run("df -B1 -P -x tmpfs -x devtmpfs"),
           this.run("cat /proc/uptime"),
           this.run("cat /proc/loadavg"),
-          this.run(
-            "ps aux --no-headers 2>/dev/null || ps -eo user,pid,pcpu,pmem,rss,stat,comm --no-headers 2>/dev/null || echo ''"
-          ).catch(() => ""),
+          this.run(`${PROCESS_LIST_COMMAND} 2>/dev/null || echo ''`).catch(() => ""),
           this.run(
             "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || true"
           ).catch(() => ""),
@@ -101,7 +100,7 @@ export class SshCollector {
       const uptime = parseFloat(uptimeLine.split(" ")[0] ?? "0");
 
       // Processes
-      const processes = parsePsAuxOutput(psLine);
+      const processes = parseProcessListOutput(psLine);
 
       // GPU (nvidia-smi, may be empty)
       const gpus = parseNvidiaSmi(gpuLine);
@@ -269,43 +268,6 @@ function parseDfBytesOutput(output: string): SystemSnapshot["disks"] {
         usagePercent: usePct,
       };
     });
-}
-
-function parsePsAuxOutput(output: string): SystemSnapshot["processes"] {
-  if (!output.trim()) return [];
-  const allPids = new Set<number>();
-  const rawRows = output
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const parts = line.trim().split(/\s+/);
-      // ps aux: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
-      // ps -eo user,pid,pcpu,pmem,rss,stat,comm: USER PID %CPU %MEM RSS STAT COMM
-      const pid = parseInt(parts[1] ?? "0", 10);
-      allPids.add(pid);
-      return { parts, pid };
-    });
-
-  return rawRows.map(({ parts, pid }) => {
-    const ppid = 0; // ps aux doesn't include ppid; treat as unknown
-    const cpuPct = parseFloat(parts[2] ?? "0");
-    const rssKb = parseInt(parts[5] ?? parts[4] ?? "0", 10);
-    const stat = parts[7] ?? parts[5] ?? "";
-    const name = parts.slice(10).join(" ") || parts[parts.length - 1] || "";
-
-    return {
-      pid,
-      ppid,
-      name,
-      cmd: name,
-      cpuPercent: cpuPct,
-      memMb: rssKb / 1024,
-      state: stat,
-      isZombie: stat.startsWith("Z"),
-      isOrphan: false, // can't determine without ppid
-    };
-  });
 }
 
 function parseNvidiaSmi(output: string): GpuStats[] {
