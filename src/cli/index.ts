@@ -1,8 +1,9 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, InvalidOptionArgumentError } from "commander";
 import chalk from "chalk";
+import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
-import { getCollectorForMachine, listKnownMachineIds } from "../collectors/index.js";
+import { getCollectorForMachine, listKnownMachineIds, LocalCollector } from "../collectors/index.js";
 import type { SystemSnapshot } from "../collectors/index.js";
 import { ProcessManager, processInfoToRow } from "../process-manager/index.js";
 import {
@@ -49,7 +50,7 @@ import {
   upsertMonitorLoopCheckTasks,
   type MonitorLoopCheckResult,
 } from "../loop-check.js";
-import type { KillSignal } from "../process-manager/index.js";
+import type { KillSignal, ProcessAction } from "../process-manager/index.js";
 import {
   buildFleetHealthReport,
   formatFleetHealthReportSummary,
@@ -284,6 +285,18 @@ function parseCursorOption(value: string): number {
     return parseBoundedInt(value, "cursor", 0, Number.MAX_SAFE_INTEGER);
   } catch (error) {
     throw new InvalidOptionArgumentError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function confirmProcessKills(message: string): Promise<boolean> {
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await prompt.question(`${message} [y/N] `);
+    return /^(?:y|yes)$/i.test(answer.trim());
+  } catch {
+    return false;
+  } finally {
+    prompt.close();
   }
 }
 
@@ -1220,33 +1233,190 @@ program
     if (!result.ok) process.exit(1);
   });
 
-// ── monitor kill <pid> ────────────────────────────────────────────────────────
+// ── monitor kill [pid] ────────────────────────────────────────────────────────
 
 program
-  .command("kill <pid>")
-  .description("Kill a process by PID")
+  .command("kill [pid]")
+  .description("Kill a process by PID or name/command regex")
   .option("-m, --machine <id>", "Machine ID", "local")
+  .option("--name <pattern>", "Kill processes whose name or command matches a regex")
   .option("-f, --force", "Use SIGKILL instead of SIGTERM")
   .option("--dry-run", "Print what would happen without executing")
-  .action(async (pidStr: string, opts) => {
-    const pid = parseInt(pidStr, 10);
-    if (isNaN(pid)) {
-      console.error(chalk.red("  Invalid PID"));
-      process.exit(1);
-    }
-
-    const machineId = resolveMachineId(opts.machine);
+  .option("-y, --yes", "Skip confirmation when multiple processes match")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (pidStr: string | undefined, opts) => {
     const signal: KillSignal = opts.force ? "SIGKILL" : "SIGTERM";
 
+    const fail = (message: string): never => {
+      if (opts.json) {
+        console.log(JSON.stringify({ error: message }));
+      } else {
+        console.error(chalk.red(`  ${message}`));
+      }
+      process.exit(1);
+    };
+
+    let machineId: string;
+    try {
+      machineId = resolveMachineId(opts.machine);
+    } catch (error) {
+      return fail(
+        `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    if ((pidStr && opts.name !== undefined) || (!pidStr && opts.name === undefined)) {
+      fail("Specify exactly one of PID or --name <pattern>");
+    }
+
+    if (opts.name !== undefined) {
+      const pattern = String(opts.name);
+      if (pattern.length === 0) fail("Name pattern must not be empty");
+
+      let matcher: RegExp;
+      try {
+        matcher = new RegExp(pattern);
+      } catch (error) {
+        fail(`Invalid name pattern: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      let collector: ReturnType<typeof getCollectorForMachine>;
+      try {
+        collector = getCollectorForMachine(machineId);
+      } catch (error) {
+        return fail(
+          `Error selecting machine: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      const result = await collector.collect();
+      if (!result.ok) return fail(`Error collecting snapshot: ${result.error}`);
+
+      const matches = result.snapshot.processes
+        .filter((proc) =>
+          (!(collector instanceof LocalCollector) || proc.pid !== process.pid) &&
+          (matcher.test(proc.name) || matcher.test(proc.cmd))
+        )
+        .sort((a, b) => a.pid - b.pid)
+        .map(({ pid, name, cmd }) => ({ pid, name, cmd }));
+
+      const output = (extra: Record<string, unknown> = {}) => {
+        console.log(JSON.stringify({
+          machine_id: machineId,
+          pattern,
+          signal,
+          matches,
+          ...extra,
+        }, null, 2));
+      };
+
+      if (opts.dryRun) {
+        if (opts.json) {
+          output({ dry_run: true });
+        } else if (matches.length === 0) {
+          console.log(chalk.yellow(`  [dry-run] No processes match /${pattern}/ on ${machineId}`));
+        } else {
+          for (const match of matches) {
+            console.log(chalk.yellow(
+              `  [dry-run] Would send ${signal} to PID ${match.pid} (${match.name}) on ${machineId}`
+            ));
+          }
+        }
+        return;
+      }
+
+      if (matches.length === 0) {
+        if (opts.json) {
+          output({ dry_run: false, actions: [] });
+        } else {
+          console.log(chalk.yellow(`  No processes match /${pattern}/ on ${machineId}`));
+        }
+        return;
+      }
+
+      if (matches.length > 1 && !opts.yes) {
+        if (!opts.json) {
+          console.log(chalk.yellow(`  Matched ${matches.length} processes on ${machineId}:`));
+          for (const match of matches) {
+            console.log(`  ${String(match.pid).padStart(7)}  ${match.name}  ${chalk.dim(match.cmd)}`);
+          }
+        }
+
+        const confirmed = await confirmProcessKills(
+          `Kill ${matches.length} processes matching /${pattern}/ with ${signal}?`
+        );
+        if (!confirmed) {
+          if (opts.json) {
+            output({ dry_run: false, cancelled: true, actions: [] });
+          } else {
+            console.log(chalk.yellow("  Cancelled"));
+          }
+          return;
+        }
+      }
+
+      const pm = new ProcessManager();
+      const killMachineId = collector instanceof LocalCollector ? "local" : machineId;
+      const remoteCollector = collector instanceof LocalCollector ? undefined : collector;
+      const remainingKillSlots = pm.remainingKillSlots(killMachineId);
+
+      if (matches.length > remainingKillSlots) {
+        const message =
+          `Refused: ${matches.length} processes match /${pattern}/ on ${machineId}, ` +
+          `but only ${remainingKillSlots} kill operation(s) remain this minute; no processes were killed`;
+        if (opts.json) {
+          output({ dry_run: false, error: message, actions: [] });
+        } else {
+          console.error(chalk.red(`  ${message}`));
+        }
+        process.exit(1);
+      }
+
+      const actions: Array<ProcessAction & { cmd: string }> = [];
+      for (const match of matches) {
+        const action = await pm.kill(match.pid, signal, killMachineId, remoteCollector);
+        actions.push({ ...action, name: match.name, cmd: match.cmd });
+      }
+
+      if (opts.json) {
+        output({ dry_run: false, actions });
+      } else {
+        for (const action of actions) {
+          if (action.action === "killed") {
+            console.log(chalk.green(`  Killed PID ${action.pid} (${action.name}) — ${action.reason}`));
+          } else if (action.action === "error") {
+            console.error(chalk.red(`  Failed to kill PID ${action.pid} (${action.name}): ${action.error ?? action.reason}`));
+          } else {
+            console.log(chalk.yellow(`  Skipped PID ${action.pid} (${action.name}) — ${action.reason}`));
+          }
+        }
+      }
+
+      if (actions.some((action) => action.action === "error")) process.exit(1);
+      return;
+    }
+
+    const resolvedPid = pidStr!;
+    const pid = parseInt(resolvedPid, 10);
+    if (isNaN(pid)) {
+      fail("Invalid PID");
+    }
+
     if (opts.dryRun) {
-      console.log(chalk.yellow(`  [dry-run] Would send ${signal} to PID ${pid} on ${machineId}`));
+      if (opts.json) {
+        console.log(JSON.stringify({ machine_id: machineId, pid, signal, dry_run: true }, null, 2));
+      } else {
+        console.log(chalk.yellow(`  [dry-run] Would send ${signal} to PID ${pid} on ${machineId}`));
+      }
       return;
     }
 
     const pm = new ProcessManager();
     const action = await pm.kill(pid, signal, machineId);
 
-    if (action.action === "killed") {
+    if (opts.json) {
+      console.log(JSON.stringify(action, null, 2));
+      if (action.action === "error") process.exit(1);
+    } else if (action.action === "killed") {
       console.log(chalk.green(`  Killed PID ${pid} — ${action.reason}`));
     } else if (action.action === "error") {
       console.error(chalk.red(`  Failed to kill PID ${pid}: ${action.error}`));

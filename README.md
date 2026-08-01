@@ -176,7 +176,7 @@ output, such as `monitor ps`.
 | `doctor [machine]` | Run health checks with diagnostics |
 | `ps [machine]` | List processes, with optional filter |
 | `exec [target] <command>` | Send a command to one tmux target or all panes on a machine |
-| `kill <pid>` | Kill a process by PID |
+| `kill [pid]` | Kill by PID or a process name/command regex |
 | `alerts [machine]` | Show recent alerts |
 | `apps [machine]` | List installed apps/packages or compare them across machines |
 | `compare-apps` | Compare installed apps across all configured machines |
@@ -249,6 +249,8 @@ monitor ps --json              # raw JSON output
 monitor kill 1234              # SIGTERM (default)
 monitor kill 1234 --force      # SIGKILL
 monitor kill 1234 --dry-run    # validate and show the action only
+monitor kill --name 'worker' --dry-run  # preview name/command regex matches
+monitor kill --name 'worker' --yes      # kill matches; skip multi-match confirmation
 ```
 
 ### monitor apps

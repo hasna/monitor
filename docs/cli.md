@@ -38,11 +38,13 @@ EC2 records accept `--aws-region` and `--aws-instance-id`.
 The generated machine ID is the lowercase name with spaces replaced by `-`.
 
 ```bash
-monitor kill <pid> [--machine <id>] [--force] [--dry-run]
+monitor kill [pid] [--name <regex>] [--machine <id>] [--force] [--dry-run] [--yes] [--json]
 ```
 
 The default signal is `SIGTERM`; `--force` selects `SIGKILL`. PIDs below 10
-are rejected. `--dry-run` validates and reports the action without killing.
+are rejected. Specify exactly one of a PID or `--name`; name matching checks
+both the process name and command. Multiple matches require confirmation unless
+`--yes` is passed. `--dry-run` reports matching processes without killing.
 
 ## Runtime Commands
 

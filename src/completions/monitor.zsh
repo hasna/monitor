@@ -111,9 +111,12 @@ _monitor() {
         kill)
           _arguments \
             '(-m --machine)'{-m,--machine}'[Machine ID]:machine-id:_monitor_machine_ids' \
+            '--name[Match process name or command regex]:pattern:' \
             '(-f --force)'[Use SIGKILL instead of SIGTERM] \
             '--dry-run[Print what would happen without executing]' \
-            '1:pid:'
+            '(-y --yes)'{-y,--yes}'[Skip confirmation for multiple matches]' \
+            '(-j --json)'{-j,--json}'[Output raw JSON]' \
+            '1::pid:'
           ;;
         alerts)
           _arguments \

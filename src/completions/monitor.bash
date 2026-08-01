@@ -161,7 +161,7 @@ _monitor() {
       ;;
 
     kill)
-      local opts="-m --machine -f --force --dry-run"
+      local opts="-m --machine --name -f --force --dry-run -y --yes -j --json"
       if [[ "$cur" == -* ]]; then
         COMPREPLY=($(compgen -W "$opts" -- "$cur"))
       fi
